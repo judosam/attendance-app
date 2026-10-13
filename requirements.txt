@@ -1,0 +1,7 @@
+flask>=3.0
+pandas
+openpyxl
+requests
+pycryptodome
+scrapy
+google-api-python-client>=2.100

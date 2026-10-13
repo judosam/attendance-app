@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8fafc">
+  <title>Attendance Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&amp;family=Geist+Mono:wght@400;500;600&amp;family=Inter:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- ============ Masthead ============ -->
+  <header class="masthead">
+    <div class="container masthead-inner">
+      <a class="brand" href="#/dashboard" aria-label="Attendance Workbench home">
+        <span class="brand-mark" aria-hidden="true">
+          <span class="material-symbols-outlined" style="font-size:21px;">fingerprint</span>
+        </span>
+        <span class="brand-text">
+          <span class="brand-title"><span class="brand-name">Attendance Workbench</span>
+            <span class="badge-soft">PRO</span></span>
+          <span class="brand-sub">Biometric &amp; Verification Engine</span>
+        </span>
+      </a>
+
+      <nav class="nav-pills" aria-label="Views">
+        <a class="nav-pill" data-nav="dashboard" href="#/dashboard">Dashboard</a>
+        <a class="nav-pill" data-nav="reports" href="#/reports">Reports History</a>
+        <a class="nav-pill" data-nav="generate" href="#/generate">Generate Report</a>
+        <a class="nav-pill" data-nav="schedules" href="#/schedules">Schedules</a>
+      </nav>
+
+      <div class="masthead-actions">
+        <span class="engine-chip" title="The local report engine is ready">
+          <span class="dot dot-ok" aria-hidden="true"></span>
+          <span>Engine Ready</span>
+        </span>
+        <a class="btn btn-primary btn-sm masthead-cta" data-nav="generate" href="#/generate">
+          <span class="material-symbols-outlined" style="font-size:18px;">add</span>
+          <span>Generate Report</span>
+        </a>
+        <span id="loginBadge" class="login-badge" hidden>
+          <span class="avatar avatar-sm" id="loginInitial" aria-hidden="true"></span>
+          <span id="loginUserName" class="muted login-user-name"></span>
+          <button type="button" id="logoutBtn" class="icon-btn" aria-label="Sign out"
+                  title="Sign out">
+            <span class="material-symbols-outlined" style="font-size:18px;">logout</span>
+          </button>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <p id="liveStatus" class="visually-hidden" role="status" aria-live="polite"></p>
+
+    <!-- ================= Generate view ================= -->
+    <section id="view-generate" class="view container page" aria-labelledby="genTitle" hidden>
+      <div class="page-head">
+        <div>
+          <h1 id="genTitle">Automated Audit Pipeline</h1>
+          <p class="page-sub">Fetch raw data straight from the Biometric &amp; TimeChamp portals by
+            date range — or upload files manually — then run the cross-reconciliation audit and
+            open the styled workbook.</p>
+        </div>
+        <button type="button" id="portalSettingsBtn" class="btn btn-secondary btn-sm">
+          <span class="material-symbols-outlined" style="font-size:16px;">settings</span>
+          <span>Settings</span>
+        </button>
+      </div>
+
+      <div class="gen-layout">
+        <!-- Left column: pick sources, confirm checks, run -->
+        <div class="gen-main">
+          <div class="mode-switch" role="tablist" aria-label="Input mode">
+            <button type="button" class="mode-tab active" id="modeFetch" role="tab"
+                    aria-selected="true" aria-controls="fetchPanel">
+              <span class="material-symbols-outlined" style="font-size:17px;">cloud_download</span>
+              <span>Fetch from portals</span>
+            </button>
+            <button type="button" class="mode-tab" id="modeUpload" role="tab"
+                    aria-selected="false" aria-controls="uploadPanel">
+              <span class="material-symbols-outlined" style="font-size:17px;">upload_file</span>
+              <span>Manual upload</span>
+            </button>
+          </div>
+
+          <!-- Fetch panel (date range + sources) -->
+          <section id="fetchPanel" class="card" role="tabpanel" aria-labelledby="modeFetch">
+            <div class="card-head-row">
+              <h2 id="fetchHeading">1 · Date Range &amp; Sources</h2>
+            </div>
+            <div class="fetch-grid">
+              <div class="field">
+                <label for="fetchFrom">From date</label>
+                <input type="date" id="fetchFrom" required>
+              </div>
+              <div class="field">
+                <label for="fetchTo">To date</label>
+                <input type="date" id="fetchTo" required>
+              </div>
+            </div>
+            <div class="source-toggles" role="group" aria-label="Data sources">
+              <label class="source-toggle">
+                <input type="checkbox" id="srcBiometric" checked>
+                <span class="source-box">
+                  <span class="material-symbols-outlined" style="font-size:19px;">fingerprint</span>
+                  <span class="source-name">Biometric portal</span>
+                  <span class="source-sub">Daily Attendance CSV</span>
+                </span>
+              </label>
+              <label class="source-toggle">
+                <input type="checkbox" id="srcTimechamp" checked>
+                <span class="source-box">
+                  <span class="material-symbols-outlined" style="font-size:19px;">schedule</span>
+                  <span class="source-name">TimeChamp</span>
+                  <span class="source-sub">Working-hours XLSX</span>
+                </span>
+              </label>
+            </div>
+            <p class="hint" id="fetchHint">Both portals are downloaded and merged by the engine —
+              same pipeline as a manual upload. Attendance up to yesterday is available.</p>
+            <p id="fetchError" class="form-error" role="alert" hidden></p>
+            <label class="check-inline" for="fetchDrive">
+              <input type="checkbox" id="fetchDrive" checked>
+              <span class="material-symbols-outlined" style="font-size:17px;">backup</span>
+              <span>Back up raw data &amp; report to Google Drive</span>
+            </label>
+            <div class="action-row" style="margin-top:14px;">
+              <button type="button" id="fetchBtn" class="btn btn-primary btn-lg">
+                <span class="material-symbols-outlined" style="font-size:18px;">cloud_download</span>
+                <span>Fetch &amp; Generate Report</span>
+              </button>
+            </div>
+          </section>
+
+          <!-- Upload panel (original flow) -->
+          <section id="uploadPanel" class="card" role="tabpanel" aria-labelledby="modeUpload" hidden>
+            <div class="card-head-row">
+              <h2 id="inputHeading">1 · Raw Punch &amp; Timesheet Sources</h2>
+              <button type="button" id="clearFilesBtn" class="btn btn-sm btn-danger-ghost" hidden>Clear All</button>
+            </div>
+            <div class="dropzone" id="dropzone">
+              <span class="material-symbols-outlined dropzone-icon" aria-hidden="true"
+                    style="font-size:30px;">upload_file</span>
+              <p class="dropzone-text">Drag &amp; drop a file here…</p>
+              <button type="button" id="browseBtn" class="btn btn-sm">Browse Files…</button>
+              <p class="hint" id="fileHint">Accepts <span translate="no">.xls, .xlsx, and .csv</span>. Pick one raw
+                data file (Biometric, Timechamp, or Manual Tracking) — or several finished reports to consolidate.</p>
+            </div>
+            <input type="file" id="fileInput" name="files" class="visually-hidden" multiple
+                   accept=".xls,.xlsx,.csv" aria-label="Choose attendance data files"
+                   aria-describedby="fileHint">
+            <p id="inputError" class="form-error" role="alert" hidden></p>
+            <ul id="fileList" class="file-list" aria-label="Selected files"></ul>
+
+            <label class="check-inline" for="uploadDrive">
+              <input type="checkbox" id="uploadDrive" checked>
+              <span class="material-symbols-outlined" style="font-size:17px;">backup</span>
+              <span>Back up raw data &amp; report to Google Drive</span>
+            </label>
+            <div class="action-row" style="margin-top:14px;">
+              <button type="button" id="runBtn" class="btn btn-primary btn-lg" disabled>Generate Audited Report</button>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="paramsHeading">
+            <h2 id="paramsHeading">2 · Engine Verification Parameters</h2>
+            <ul class="param-list">
+              <li class="param-item">
+                <span class="param-title">HR attendance cross-check</span>
+                <span class="param-desc">Punches vs approved HR leave and holidays (live portal fetch).</span>
+              </li>
+              <li class="param-item">
+                <span class="param-title">Shift boundary audit</span>
+                <span class="param-desc">Late logins past grace and early logouts flagged per day.</span>
+              </li>
+              <li class="param-item">
+                <span class="param-title">Worked-duration floors</span>
+                <span class="param-desc">Days under 4h and under 8h worked flagged in the summary.</span>
+              </li>
+              <li class="param-item">
+                <span class="param-title">Break policy</span>
+                <span class="param-desc">Excessive break hours and more than 4 pauses per day flagged.</span>
+              </li>
+            </ul>
+            <p class="hint" style="margin-top:12px;">Built on this computer · large files can take a few
+              minutes · the HR check needs internet.</p>
+          </section>
+        </div>
+
+        <!-- Right column: live engine monitor + result -->
+        <aside class="gen-run" aria-label="Engine run monitor">
+          <div id="runPlaceholder" class="card run-placeholder">
+            <span class="material-symbols-outlined" aria-hidden="true" style="font-size:26px;">play_circle</span>
+            <div>
+              <p class="run-placeholder-title">Run monitor</p>
+              <p class="muted" style="font-size:13px;">Add a file above, then press
+                <strong>Generate Audited Report</strong>. Live progress and the engine log appear here,
+                and the finished report opens with one click.</p>
+            </div>
+          </div>
+
+          <section id="statusCard" class="card run-panel" hidden aria-label="Generation progress">
+            <header class="run-panel-head">
+              <div class="run-title">
+                <span class="spinner" aria-hidden="true"></span>
+                <div>
+                  <p class="panel-eyebrow">Engine · Live Run</p>
+                  <p id="statusText">Starting…</p>
+                </div>
+              </div>
+              <span class="status-pill" data-status="running">Running</span>
+            </header>
+            <div class="progress-track" role="progressbar" aria-label="Report generation"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="progress-fill"></div>
+            </div>
+            <div class="log-panel">
+              <div class="log-head">
+                <span class="log-dots" aria-hidden="true">
+                  <span class="log-dot log-dot-red"></span>
+                  <span class="log-dot log-dot-amber"></span>
+                  <span class="log-dot log-dot-green"></span>
+                </span>
+                <span class="log-live" aria-hidden="true"></span>
+                <span>Engine log</span>
+                <span class="log-tail" aria-hidden="true"></span>
+                <span class="muted" style="font-size:11px;">auto-scrolls</span>
+              </div>
+              <pre id="log" class="log" tabindex="0" aria-label="Live processing log"></pre>
+            </div>
+          </section>
+
+          <section id="resultCard" class="card result-card" hidden aria-labelledby="resultHeading" tabindex="-1">
+            <div class="result-hero">
+              <span class="material-symbols-outlined result-hero-icon" aria-hidden="true">task_alt</span>
+              <div>
+                <p class="panel-eyebrow" style="color:var(--ok-strong);">Run completed</p>
+                <h2 id="resultHeading" style="margin-top:2px;">Report Ready</h2>
+              </div>
+            </div>
+            <p class="result-copy">The styled workbook was generated on this computer.</p>
+            <dl class="result-meta">
+              <div><dt>File</dt><dd id="resultName"></dd></div>
+              <div><dt>Saved in</dt><dd id="resultFolder" class="path"></dd></div>
+            </dl>
+            <div class="result-actions">
+              <a id="resultViewLink" class="btn btn-primary btn-lg" href="#/reports/" hidden>View Report
+                <span class="material-symbols-outlined" style="font-size:17px;">arrow_forward</span></a>
+              <a id="downloadLink" class="btn btn-lg" href="#">Download .xlsx
+                <span class="material-symbols-outlined" style="font-size:16px;">download</span></a>
+              <button type="button" id="resetBtn" class="btn btn-ghost btn-sm">Generate Another Report</button>
+            </div>
+          </section>
+
+          <section id="errorCard" class="card error-card" hidden role="alert">
+            <h2>Couldn't Generate the Report</h2>
+            <pre id="errorText" class="error-text"></pre>
+            <div class="result-actions">
+              <button type="button" id="retryBtn" class="btn">Choose Files Again</button>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= Dashboard view ================= -->
+    <section id="view-dashboard" class="view container page" aria-labelledby="dashTitle" hidden>
+      <div class="page-head">
+        <div>
+          <h1 id="dashTitle">Dashboard</h1>
+          <p class="page-sub">Run health and the latest attendance snapshot — no Excel needed.</p>
+        </div>
+        <button type="button" id="dashRefresh" class="btn btn-secondary btn-sm"
+                aria-label="Refresh dashboard data">
+          <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      <div id="dashError" class="alert" role="alert" hidden></div>
+
+      <section id="dashEmpty" class="card empty-card" hidden>
+        <h2>No reports yet</h2>
+        <p>Generate your first report and this dashboard will show run health,
+          attendance mix, and compliance flags for it.</p>
+        <a class="btn btn-primary" href="#/generate">Generate your first report</a>
+      </section>
+
+      <div id="dashContent" hidden>
+        <!-- Run health KPIs -->
+        <section class="kpi-row" aria-label="Run health summary">
+          <article class="kpi-card"><span class="material-symbols-outlined kpi-icon" aria-hidden="true">calendar_month</span>
+            <span class="kpi-label">Runs This Month</span>
+            <span id="kpiRuns" class="kpi-value">–</span><span id="kpiRunsNote" class="kpi-note">this month</span></article>
+          <article class="kpi-card"><span class="material-symbols-outlined kpi-icon" aria-hidden="true">verified</span>
+            <span class="kpi-label">Success Rate</span>
+            <span id="kpiSuccess" class="kpi-value">–</span><span class="kpi-note">of finished runs</span></article>
+          <article class="kpi-card"><span class="material-symbols-outlined kpi-icon" aria-hidden="true">timer</span>
+            <span class="kpi-label">Avg Duration</span>
+            <span id="kpiDur" class="kpi-value">–</span><span class="kpi-note">per completed run</span></article>
+          <article class="kpi-card"><span class="material-symbols-outlined kpi-icon" aria-hidden="true">event_note</span>
+            <span class="kpi-label">Latest Run</span>
+            <span id="kpiLatest" class="kpi-value kpi-value-sm">–</span>
+            <span class="kpi-note" id="kpiLatestNote">no runs yet</span></article>
+        </section>
+
+        <!-- Latest report band: left 2/3 mix, right 1/3 compliance -->
+        <div class="band-grid">
+          <section class="card panel" aria-labelledby="latestTitle">
+            <div class="panel-head">
+              <div>
+                <p class="panel-eyebrow" id="latestEyebrow">Latest Report</p>
+                <h2 id="latestTitle" class="panel-title">Attendance Mix</h2>
+              </div>
+              <span class="badge-soft badge-blue" id="latestBadge">–</span>
+            </div>
+            <div id="latestBody" class="panel-body" aria-live="polite">
+              <p class="muted">Loading latest report…</p>
+            </div>
+            <a id="latestLink" class="text-link" href="#/reports/" hidden>View full summary &amp; charts
+              <span class="material-symbols-outlined" style="font-size:16px;">arrow_forward</span></a>
+          </section>
+
+          <section class="card panel" aria-labelledby="flagsTitle">
+            <div class="panel-head">
+              <div>
+                <p class="panel-eyebrow">Policy Auditing</p>
+                <h2 id="flagsTitle" class="panel-title">Compliance Flags</h2>
+              </div>
+              <span class="badge-soft badge-rose" id="flagsBadge">–</span>
+            </div>
+            <div id="flagsBody" class="panel-body" aria-live="polite">
+              <p class="muted">Loading flags…</p>
+            </div>
+            <a id="flagsLink" class="text-link" href="#/reports/" hidden>Audit the full incident list
+              <span class="material-symbols-outlined" style="font-size:16px;">arrow_forward</span></a>
+          </section>
+        </div>
+
+        <!-- Recent runs -->
+        <section class="card table-card" aria-labelledby="recentTitle">
+          <div class="table-head">
+            <div>
+              <p class="panel-eyebrow">Engine Execution Ledger</p>
+              <h2 id="recentTitle" class="panel-title">Recent Engine Job Runs</h2>
+            </div>
+            <p class="table-hint" id="recentCount">–</p>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table clickable">
+              <thead>
+                <tr>
+                  <th scope="col">Job ID</th><th scope="col">Input File / Source</th>
+                  <th scope="col">Type</th><th scope="col">Status</th>
+                  <th scope="col" class="num">Duration</th>
+                  <th scope="col" class="num">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="recentRows"></tbody>
+            </table>
+          </div>
+          <div class="table-foot">
+            <a class="text-link" href="#/reports">View all runs in Reports History
+              <span class="material-symbols-outlined" style="font-size:16px;">arrow_forward</span></a>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- ================= Reports view ================= -->
+    <section id="view-reports" class="view container page" aria-labelledby="repTitle" hidden>
+      <div class="page-head">
+        <div>
+          <h1 id="repTitle">Reports History</h1>
+          <p class="page-sub">Every run on this computer, newest first. Showing
+            <strong>20 runs</strong> per page — the newest <strong>100 runs</strong> are kept;
+            older ones are removed to save space.</p>
+        </div>
+        <div class="page-head-actions">
+          <button type="button" id="repClear" class="btn btn-danger-ghost btn-sm" hidden>
+            <span class="material-symbols-outlined" style="font-size:16px;">delete_sweep</span>
+            <span>Clear History</span></button>
+        </div>
+      </div>
+
+      <div id="repError" class="alert" role="alert" hidden></div>
+
+      <div class="filter-bar" role="group" aria-label="Filter runs by status">
+        <button type="button" class="chip chip-active" data-status="all">All</button>
+        <button type="button" class="chip" data-status="done">Done</button>
+        <button type="button" class="chip" data-status="error">Failed</button>
+        <span class="filter-spacer" aria-hidden="true"></span>
+        <p id="repCount" class="muted" aria-live="polite">–</p>
+      </div>
+
+      <section id="repEmpty" class="card empty-card" hidden>
+        <h2>No runs here yet</h2>
+        <p>When you generate a report — or when the app finds reports from earlier
+          sessions — they appear in this list for re-downloading.</p>
+        <a class="btn btn-primary" href="#/generate">Generate a report</a>
+      </section>
+
+      <section id="repTableCard" class="card table-card" hidden>
+        <div class="table-scroll">
+          <table class="data-table clickable">
+            <thead>
+              <tr>
+                <th scope="col">Run date &amp; time</th><th scope="col">Input File / Source</th>
+                <th scope="col">Type</th><th scope="col">Status</th>
+                <th scope="col" class="num">Duration</th>
+                <th scope="col" class="num">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="repRows"></tbody>
+          </table>
+        </div>
+        <div class="pager" id="repPager" hidden>
+          <button type="button" id="repPrev" class="btn btn-sm">← Prev</button>
+          <span id="repPageInfo" class="muted" aria-live="polite">Page 1 of 1</span>
+          <button type="button" id="repNext" class="btn btn-sm">Next →</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- ================= Report detail view ================= -->
+    <section id="view-report" class="view container page" aria-labelledby="repDetailHeading" hidden>
+      <div id="repDetailBody" aria-live="polite">
+        <p class="muted">Loading report summary…</p>
+      </div>
+    </section>
+
+    <!-- ================= Schedules view ================= -->
+    <section id="view-schedules" class="view container page" aria-labelledby="schedTitle" hidden>
+      <div class="page-head">
+        <div>
+          <h1 id="schedTitle">Schedules</h1>
+          <p class="page-sub">Automatic portal fetch + report generation on a Daily, Weekly,
+            or Monthly rhythm — the app must be running at the scheduled time.</p>
+        </div>
+        <div class="page-head-actions">
+          <button type="button" id="compileMonthBtn" class="btn">
+            <span class="material-symbols-outlined" style="font-size:18px;">calendar_month</span>
+            <span>Compile monthly report</span>
+          </button>
+          <button type="button" id="newScheduleBtn" class="btn btn-primary">
+            <span class="material-symbols-outlined" style="font-size:18px;">add</span>
+            <span>New Schedule</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="schedError" class="alert" role="alert" hidden></div>
+
+      <section id="schedEmpty" class="card empty-card" hidden>
+        <h2>No schedules yet</h2>
+        <p>Create a schedule and this app will pull the raw attendance data from the portals
+          and generate the report automatically — every day, week, or month.</p>
+        <button type="button" id="schedEmptyCta" class="btn btn-primary">Create your first schedule</button>
+      </section>
+
+      <section id="schedTableCard" class="card table-card" hidden>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Schedule</th><th scope="col">Rhythm</th>
+                <th scope="col">Sources</th><th scope="col">Next run</th>
+                <th scope="col">Last run</th>
+                <th scope="col" class="num">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="schedRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="hint" id="schedNote" hidden>Schedules run while this app is open. If the app is
+        closed at the scheduled time, the run fires once on the next start (catch-up).</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>Runs locally on this computer — raw data never leaves your machine, except the HR
+        attendance check made by the report itself.</p>
+      <p class="footer-build">Attendance Workbench · local engine</p>
+    </div>
+  </footer>
+
+  <!-- Audit Console: full-screen drill-in (Overview / Departments / Compliance / Employees) -->
+  <div id="consoleOverlay" class="console-backdrop" hidden>
+    <div class="console-frame" role="dialog" aria-modal="true" aria-labelledby="consoleTitle">
+      <header class="console-head">
+        <div>
+          <p class="panel-eyebrow" id="consoleEyebrow">Audit Console · run</p>
+          <h2 id="consoleTitle">Biometric &amp; Attendance Ledger</h2>
+          <p class="console-sub muted" id="consoleSub"></p>
+        </div>
+        <button type="button" id="consoleClose" class="icon-btn" aria-label="Close audit console">
+          <span class="material-symbols-outlined" style="font-size:20px;">close</span>
+        </button>
+      </header>
+      <div class="console-body">
+        <nav class="console-rail" aria-label="Audit sections">
+          <button type="button" class="rail-item" data-console-tab="overview">
+            <span class="material-symbols-outlined" style="font-size:19px;">donut_large</span>
+            <span>Overview Mix</span></button>
+          <button type="button" class="rail-item" data-console-tab="dept">
+            <span class="material-symbols-outlined" style="font-size:19px;">account_tree</span>
+            <span>Department Breakdown</span></button>
+          <button type="button" class="rail-item" data-console-tab="breaches">
+            <span class="material-symbols-outlined" style="font-size:19px;">gavel</span>
+            <span>Compliance &amp; Breaches</span></button>
+          <button type="button" class="rail-item" data-console-tab="employees">
+            <span class="material-symbols-outlined" style="font-size:19px;">badge</span>
+            <span>Employee Audit</span></button>
+        </nav>
+        <div class="console-pane" id="consolePane" tabindex="-1" aria-live="polite">
+          <p class="muted">Loading…</p>
+        </div>
+      </div>
+      <footer class="console-foot">
+        <button type="button" id="consoleExport" class="btn btn-sm">
+          <span class="material-symbols-outlined" style="font-size:17px;">download</span>
+          <span>Export flagged list (.csv)</span></button>
+        <span class="console-hint muted">Read-only audit of the generated workbook — no changes are sent anywhere.</span>
+        <button type="button" id="consoleDismiss" class="btn btn-sm">Dismiss</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Login window (covers the app until signed in) -->
+  <div id="loginOverlay" class="login-backdrop">
+    <div class="login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+      <div class="login-brand">
+        <span class="brand-mark" aria-hidden="true"
+              style="width:44px;height:44px;border-radius:12px;">
+          <span class="material-symbols-outlined" style="font-size:25px;">fingerprint</span>
+        </span>
+        <div>
+          <p class="login-title" id="loginTitle">Attendance Workbench</p>
+          <p class="muted login-sub">Biometric &amp; Verification Engine</p>
+        </div>
+      </div>
+      <h2 class="login-heading">Welcome back</h2>
+      <p class="muted login-lead">Sign in to open the dashboard and run attendance audits.</p>
+      <form id="loginForm" novalidate>
+        <div class="field">
+          <label for="loginUser">Username</label>
+          <input id="loginUser" name="username" type="text" autocomplete="username"
+                 autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="loginPass">Password</label>
+          <div class="pass-wrap">
+            <input id="loginPass" name="password" type="password"
+                   autocomplete="current-password" required>
+            <button type="button" id="loginToggle" class="icon-btn pass-toggle"
+                    aria-label="Show password" title="Show password">
+              <span class="material-symbols-outlined" style="font-size:19px;">visibility</span>
+            </button>
+          </div>
+        </div>
+        <p id="loginError" class="form-error" role="alert" hidden></p>
+        <button type="submit" id="loginBtn" class="btn btn-primary btn-lg" style="width:100%;">
+          Sign In</button>
+      </form>
+      <!-- <p id="loginHint" class="hint login-hint"></p> -->
+    </div>
+  </div>
+
+  <!-- Portal settings modal -->
+  <div id="portalDialog" class="modal-backdrop" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="portalTitle">
+      <h2 id="portalTitle">Settings</h2>
+      <p class="muted" style="font-size:13px;">Used by “Fetch from portals”, schedules, and
+        email delivery. Passwords stay on this computer.</p>
+      <form id="portalForm" novalidate>
+        <fieldset class="portal-fieldset">
+          <legend><span class="material-symbols-outlined" style="font-size:16px;">fingerprint</span> Biometric portal</legend>
+          <div class="field">
+            <label for="bioUrl">Portal URL</label>
+            <input id="bioUrl" type="text" spellcheck="false" placeholder="http://…">
+          </div>
+          <div class="field">
+            <label for="bioUser">Username</label>
+            <input id="bioUser" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="bioPass">Password</label>
+            <input id="bioPass" type="password" autocomplete="new-password" placeholder="•••••••• (unchanged)">
+          </div>
+        </fieldset>
+        <fieldset class="portal-fieldset">
+          <legend><span class="material-symbols-outlined" style="font-size:16px;">schedule</span> TimeChamp</legend>
+          <div class="field">
+            <label for="tcUrl">Portal URL</label>
+            <input id="tcUrl" type="text" spellcheck="false" placeholder="https://…">
+          </div>
+          <div class="field">
+            <label for="tcUser">Username</label>
+            <input id="tcUser" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="tcPass">Password</label>
+            <input id="tcPass" type="password" autocomplete="new-password" placeholder="•••••••• (unchanged)">
+          </div>
+        </fieldset>
+        <fieldset class="portal-fieldset">
+          <legend><span class="material-symbols-outlined" style="font-size:16px;">mail</span> Email delivery (SMTP)</legend>
+          <div class="sched-grid sched-grid-2">
+            <div class="field">
+              <label for="mailHost">SMTP host</label>
+              <input id="mailHost" type="text" placeholder="smtp.gmail.com" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="mailPort">Port</label>
+              <input id="mailPort" type="number" min="1" max="65535" value="587">
+            </div>
+          </div>
+          <div class="field" style="margin-top:10px;">
+            <label for="mailUser">SMTP username</label>
+            <input id="mailUser" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field" style="margin-top:10px;">
+            <label for="mailPass">SMTP password</label>
+            <input id="mailPass" type="password" autocomplete="new-password" placeholder="•••••••• (unchanged)">
+          </div>
+          <div class="field" style="margin-top:10px;">
+            <label for="mailFrom">From address (optional)</label>
+            <input id="mailFrom" type="text" placeholder="reports@company.com" spellcheck="false">
+          </div>
+          <div class="field" style="margin-top:10px;">
+            <label for="mailRecipients">Default recipients (comma-separated)</label>
+            <input id="mailRecipients" type="text" placeholder="hr@company.com, manager@company.com" spellcheck="false">
+          </div>
+          <label class="check-row" style="margin-top:10px;">
+            <input type="checkbox" id="mailTls" checked>
+            <span>Use STARTTLS (recommended)</span>
+          </label>
+          <div class="modal-actions" style="justify-content:flex-start; margin-top:12px;">
+            <button type="button" id="mailTestBtn" class="btn btn-sm">
+              <span class="material-symbols-outlined" style="font-size:16px;">send</span>
+              <span>Send test email</span>
+            </button>
+            <span id="mailTestResult" class="muted" style="font-size:12px;" aria-live="polite"></span>
+          </div>
+        </fieldset>
+
+        <fieldset class="portal-fieldset">
+          <legend><span class="material-symbols-outlined" style="font-size:16px;">backup</span> Google Drive backup</legend>
+          <label class="check-inline" for="driveEnabled">
+            <input type="checkbox" id="driveEnabled">
+            <span>Enable Google Drive backup (service account)</span>
+          </label>
+          <div class="field" style="margin-top:10px;">
+            <label for="driveFolder">Drive folder ID</label>
+            <input id="driveFolder" type="text" spellcheck="false"
+                   placeholder="1FPBNgekIJgxrL8_QhPpOq4Z9zbwfRKAX">
+          </div>
+          <label class="check-inline" for="driveUploadRaw">
+            <input type="checkbox" id="driveUploadRaw" checked>
+            <span>Upload raw data (YYYY/month/rawdata)</span>
+          </label>
+          <label class="check-inline" for="driveUploadReports">
+            <input type="checkbox" id="driveUploadReports" checked>
+            <span>Upload generated reports (YYYY/month/reports)</span>
+          </label>
+          <label class="check-inline" for="driveDeleteSync">
+            <input type="checkbox" id="driveDeleteSync" checked>
+            <span>Delete on Drive when a run is deleted locally</span>
+          </label>
+          <p class="hint">Auth is automatic: on GCP the instance's attached service account is used,
+            and on a local machine <span class="mono">workspace/gdrive_service_account.json</span> is
+            picked up if present. The account needs <strong>Editor</strong> access to the folder — share
+            it with: <span id="driveSaEmail" class="mono"></span></p>
+          <div class="modal-actions" style="justify-content:flex-start; margin-top:10px;">
+            <button type="button" id="driveTestBtn" class="btn btn-sm">
+              <span class="material-symbols-outlined" style="font-size:16px;">cloud_done</span>
+              <span>Test Drive connection</span>
+            </button>
+            <span id="driveTestResult" class="muted" style="font-size:12px;" aria-live="polite"></span>
+          </div>
+        </fieldset>
+
+        <p id="portalError" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions">
+          <button type="button" id="portalCancel" class="btn">Cancel</button>
+          <button type="submit" id="portalSave" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Schedule editor modal -->
+  <div id="scheduleDialog" class="modal-backdrop" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="scheduleFormTitle">
+      <h2 id="scheduleFormTitle">New Schedule</h2>
+      <form id="scheduleForm" novalidate>
+        <div class="field">
+          <label for="schedName">Schedule name</label>
+          <input id="schedName" type="text" maxlength="80" placeholder="e.g. July month-end audit" required>
+        </div>
+        <div class="sched-grid">
+          <div class="field">
+            <label for="schedFreq">Frequency</label>
+            <select id="schedFreq">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="schedTime">At time</label>
+            <input id="schedTime" type="time" value="07:00" required>
+          </div>
+          <div class="field" id="schedMonthDayField" hidden>
+            <label for="schedMonthDay">On date</label>
+            <select id="schedMonthDay"></select>
+          </div>
+        </div>
+        <div class="field" id="schedWeekdayField" hidden style="margin-top:12px;">
+          <label id="schedWeekdayLabel">Run on days</label>
+          <div id="schedSendDays" class="day-chip-row" role="group" aria-label="Run / send days"></div>
+          <p class="hint" id="schedDayHint" hidden>No day selected = the schedule runs every day.</p>
+        </div>
+        <div class="field">
+          <label for="schedRange">Fetch date range</label>
+          <select id="schedRange">
+            <option value="1">Yesterday only</option>
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="full">Previous month (full, auto 28–31 days)</option>
+          </select>
+        </div>
+        <div class="source-toggles" role="group" aria-label="Data sources">
+          <label class="source-toggle">
+            <input type="checkbox" id="schedSrcBiometric" checked>
+            <span class="source-box">
+              <span class="material-symbols-outlined" style="font-size:19px;">fingerprint</span>
+              <span class="source-name">Biometric portal</span>
+            </span>
+          </label>
+          <label class="source-toggle">
+            <input type="checkbox" id="schedSrcTimechamp" checked>
+            <span class="source-box">
+              <span class="material-symbols-outlined" style="font-size:19px;">schedule</span>
+              <span class="source-name">TimeChamp</span>
+            </span>
+          </label>
+        </div>
+        <label class="check-row">
+          <input type="checkbox" id="schedEnabled" checked>
+          <span>Enabled — run automatically at the scheduled time</span>
+        </label>
+        <div class="field" style="margin-top:12px;">
+          <div class="field-label-row">
+            <label for="schedEmailInput">Email the report to (optional)</label>
+            <button type="button" id="schedEmailPlus" class="icon-plus"
+                    title="Add recipient email" aria-label="Add recipient email"
+                    aria-expanded="false" aria-controls="schedEmailAddRow">
+              <span class="material-symbols-outlined" style="font-size:18px;" aria-hidden="true">add</span>
+            </button>
+          </div>
+          <div id="schedEmailChips" class="chip-editor" aria-label="Recipient email addresses"></div>
+          <div class="chip-add-row" id="schedEmailAddRow" hidden>
+            <input id="schedEmailInput" type="email" style="flex:1;"
+                   placeholder="name@company.com" spellcheck="false">
+            <button type="button" id="schedEmailAdd" class="btn">Add</button>
+          </div>
+          <p class="hint" style="margin-top:4px;">Uses the SMTP settings (Settings → Email delivery).
+            The finished report is attached automatically.</p>
+        </div>
+        <fieldset class="portal-fieldset" style="margin-top:14px;">
+          <legend><span class="material-symbols-outlined" style="font-size:16px;">backup</span> Google Drive</legend>
+          <label class="check-inline" for="schedDrive">
+            <input type="checkbox" id="schedDrive" checked>
+            <span>Back up each run's raw data &amp; report to Drive</span>
+          </label>
+          <label class="check-inline" for="schedMonthly">
+            <input type="checkbox" id="schedMonthly">
+            <span>Send monthly report — compile this month's raw data</span>
+          </label>
+          <p class="hint" id="schedMonthlyHint" hidden>With this on, the schedule skips the portal fetch and
+            compiles the PREVIOUS calendar month's raw data from Google Drive into the “Monthly
+            Attendance Compilation” workbook, emailing it when recipients are set above. So a run
+            on 1 Oct sends September's report, next month's run sends October's, and so on — pick
+            the run day and time above (e.g. day 1 of each month).</p>
+        </fieldset>
+        <p id="scheduleError" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions">
+          <button type="button" id="scheduleCancel" class="btn">Cancel</button>
+          <button type="submit" id="scheduleSave" class="btn btn-primary">Save Schedule</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Monthly compilation dialog -->
+  <div id="monthlyDialog" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="monthlyTitle">
+      <h2 id="monthlyTitle">Compile monthly report</h2>
+      <p class="muted" style="font-size:13px;">Downloads the month's raw data from Google Drive, runs the
+        report engine on it, and uploads one “Monthly Attendance Compilation” workbook back to Drive.</p>
+      <form id="monthlyForm" novalidate>
+        <div class="sched-grid">
+          <div class="field">
+            <label for="monthlyMonth">Month</label>
+            <select id="monthlyMonth"></select>
+          </div>
+          <div class="field">
+            <label for="monthlyYear">Year</label>
+            <select id="monthlyYear"></select>
+          </div>
+        </div>
+        <div id="monthlyRun" class="log-panel log-panel--dialog" hidden>
+          <div class="log-head">
+            <span class="log-dots" aria-hidden="true">
+              <span class="log-dot log-dot-red"></span>
+              <span class="log-dot log-dot-amber"></span>
+              <span class="log-dot log-dot-green"></span>
+            </span>
+            <span class="log-live" aria-hidden="true"></span>
+            <span>Compilation log</span>
+            <span class="log-tail" aria-hidden="true"></span>
+            <span class="muted" style="font-size:11px;">auto-scrolls</span>
+          </div>
+          <pre id="monthlyLog" class="log" tabindex="0" aria-label="Monthly compilation log"></pre>
+        </div>
+        <div id="monthlySummary" class="monthly-summary" hidden></div>
+        <p id="monthlyError" class="form-error" role="alert" hidden></p>
+        <div class="modal-actions">
+          <button type="button" id="monthlyCancel" class="btn">Cancel</button>
+          <button type="submit" id="monthlyGo" class="btn btn-primary">Compile</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast notifications (errors, warnings, issues) -->
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Confirmation dialog for destructive actions -->
+  <div id="confirmDialog" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle"
+         aria-describedby="confirmCopy">
+      <h2 id="confirmTitle">–</h2>
+      <p id="confirmCopy" class="muted"></p>
+      <div class="modal-actions">
+        <button type="button" id="confirmCancel" class="btn">Cancel</button>
+        <button type="button" id="confirmOk" class="btn btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js', v=v) }}"></script>
+</body>
+</html>

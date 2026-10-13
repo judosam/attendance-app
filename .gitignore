@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Runtime and local storage
+workspace/
+20*/
+*.xlsx
+*.csv
+*.zip
+.~lock.*
+*~
+
+# Secrets and credentials
+.secret_key
+*.pem
+*.key
+*.p12
+
+# Documents and runbooks
+*.docx
+
+# IDE & OS
+.freebuff/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

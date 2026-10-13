@@ -1,0 +1,9 @@
+# Never ship runtime data or local artifacts to GCP
+workspace/
+__pycache__/
+*.pyc
+.secret_key
+app1-clean.zip
+app1-update*.zip
+*.docx
+.freebuff/
