@@ -1437,6 +1437,7 @@
     runPlaceholder: $("runPlaceholder"),
     statusCard: $("statusCard"),
     statusText: $("statusText"),
+    cancelBtn: $("cancelJobBtn"),
     log: $("log"),
     resultCard: $("resultCard"),
     resultName: $("resultName"),
@@ -1608,7 +1609,10 @@
 
     const form = new FormData();
     gen.files.forEach((file) => form.append("files", file, file.name));
-    form.append("drive_upload", mode.uploadDrive.checked ? "1" : "0");
+    form.append("drive_upload", mode.uploadDrive && mode.uploadDrive.checked ? "1" : "0");
+    if (mode.uploadMail && mode.uploadMail.checked) {
+      form.append("email_to", (mode.uploadMailTo && mode.uploadMailTo.value.trim()) || "__DEFAULT__");
+    }
 
     let response;
     try {
@@ -1666,6 +1670,16 @@
             { actionLabel: "View report", actionHref: `#/reports/${encodeURIComponent(gen.jobId)}` }
           );
           finishSuccess(data.output);
+        } else if (data.status === "cancelled") {
+          window.clearInterval(gen.pollTimer);
+          gen.stageLabel = null;
+          gen.stagePct = null;
+          gen.statusCard.hidden = true;
+          gen.runPlaceholder.hidden = false;
+          setBusy(false);
+          showWarnToast("Run cancelled", "Report generation was cancelled.");
+          announce("Report generation was cancelled.");
+          maybeRefreshHistory();
         } else if (data.status === "error") {
           window.clearInterval(gen.pollTimer);
           const detail = data.error ||
@@ -2141,7 +2155,13 @@
     srcBiometric: $("srcBiometric"),
     srcTimechamp: $("srcTimechamp"),
     drive: $("fetchDrive"),
+    fetchMail: $("fetchMail"),
+    fetchMailRow: $("fetchMailRow"),
+    fetchMailTo: $("fetchMailTo"),
     uploadDrive: $("uploadDrive"),
+    uploadMail: $("uploadMail"),
+    uploadMailRow: $("uploadMailRow"),
+    uploadMailTo: $("uploadMailTo"),
     current: "fetch",
   };
 
@@ -2214,10 +2234,19 @@
 
     let payload = null;
     try {
+      const fetchReqBody = {
+        sources,
+        from: fromValue,
+        to: toValue,
+        drive_upload: mode.drive.checked,
+      };
+      if (mode.fetchMail && mode.fetchMail.checked) {
+        fetchReqBody.email_to = (mode.fetchMailTo && mode.fetchMailTo.value.trim()) || "__DEFAULT__";
+      }
       const response = await fetch("/api/fetch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sources, from: fromValue, to: toValue, drive_upload: mode.drive.checked }),
+        body: JSON.stringify(fetchReqBody),
       });
       payload = await response.json().catch(() => null);
       if (!response.ok || !payload || !payload.ok) {
@@ -2250,9 +2279,71 @@
 
   mode.fetchBtn.addEventListener("click", startFetchJob);
 
-  // Default the range to the last 7 days (engine-friendly, usually complete).
+  // Default the range to the last 7 days (attendance up to yesterday is available).
+  const yesterday = isoDay(-1);
+  mode.fetchFrom.max = yesterday;
+  mode.fetchTo.max = yesterday;
   mode.fetchFrom.value = isoDay(-7);
-  mode.fetchTo.value = isoDay(-1);
+  mode.fetchTo.value = yesterday;
+  mode.fetchTo.min = mode.fetchFrom.value;
+
+  mode.fetchFrom.addEventListener("change", () => {
+    if (mode.fetchTo.value && mode.fetchFrom.value > mode.fetchTo.value) {
+      mode.fetchTo.value = mode.fetchFrom.value;
+    }
+    mode.fetchTo.min = mode.fetchFrom.value;
+  });
+  mode.fetchTo.addEventListener("change", () => {
+    if (mode.fetchTo.value > yesterday) {
+      mode.fetchTo.value = yesterday;
+    }
+  });
+
+  if (mode.fetchMail && mode.fetchMailRow) {
+    mode.fetchMail.addEventListener("change", () => {
+      mode.fetchMailRow.hidden = !mode.fetchMail.checked;
+      if (mode.fetchMail.checked && mode.fetchMailTo) mode.fetchMailTo.focus();
+    });
+  }
+  if (mode.uploadMail && mode.uploadMailRow) {
+    mode.uploadMail.addEventListener("change", () => {
+      mode.uploadMailRow.hidden = !mode.uploadMail.checked;
+      if (mode.uploadMail.checked && mode.uploadMailTo) mode.uploadMailTo.focus();
+    });
+  }
+
+  if (gen.cancelBtn) {
+    gen.cancelBtn.addEventListener("click", async () => {
+      if (!gen.jobId) return;
+      if (!confirm("Are you sure you want to cancel this report generation?")) return;
+      try {
+        gen.cancelBtn.disabled = true;
+        gen.statusText.textContent = "Cancelling…";
+        await fetch(`/api/jobs/${encodeURIComponent(gen.jobId)}/cancel`, { method: "POST" });
+        window.clearInterval(gen.pollTimer);
+        gen.statusCard.hidden = true;
+        gen.runPlaceholder.hidden = false;
+        setBusy(false);
+        showWarnToast("Run cancelled", "Report generation was cancelled.");
+        announce("Report generation cancelled.");
+        maybeRefreshHistory();
+      } catch (err) {
+        showErrorToast("Cancel failed", apiErrorText(err));
+      } finally {
+        gen.cancelBtn.disabled = false;
+      }
+    });
+  }
+
+  // Populate email recipient placeholder from default mail settings
+  fetchJSON("/api/mail-settings").then((res) => {
+    const rec = (res && res.settings && res.settings.recipients) || "";
+    if (rec) {
+      const ph = `e.g. ${rec} (or enter custom)`;
+      if (mode.fetchMailTo) mode.fetchMailTo.placeholder = ph;
+      if (mode.uploadMailTo) mode.uploadMailTo.placeholder = ph;
+    }
+  }).catch(() => {});
 
   /* ---------------- portal + mail settings modal ---------------- */
   const portal = {
@@ -2987,7 +3078,18 @@
     monthly.pollTimer = null;
   }
 
-  monthly.cancel.addEventListener("click", () => {
+  monthly.cancel.addEventListener("click", async () => {
+    if (monthly.jobId && monthly.go.disabled) {
+      if (!confirm("Compilation is currently in progress. Cancel it?")) return;
+      try {
+        await fetch(`/api/jobs/${encodeURIComponent(monthly.jobId)}/cancel`, { method: "POST" });
+        showWarnToast("Compilation cancelled", "Monthly compilation was cancelled.");
+      } catch (e) {
+        // ignore
+      }
+      monthly.go.disabled = false;
+      monthly.go.textContent = "Compile";
+    }
     stopMonthlyPoll();
     monthly.dialog.hidden = true;
   });
@@ -3063,6 +3165,12 @@
     if (data.status === "done") {
       stopMonthlyPoll();
       showMonthlySummary(data);
+    } else if (data.status === "cancelled") {
+      stopMonthlyPoll();
+      monthly.error.textContent = "Monthly compilation was cancelled.";
+      monthly.error.hidden = false;
+      monthly.go.disabled = false;
+      monthly.go.textContent = "Compile";
     } else if (data.status === "error") {
       stopMonthlyPoll();
       const message = data.error || "Monthly compilation failed.";

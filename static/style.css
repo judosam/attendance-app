@@ -1438,7 +1438,27 @@ h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.
 }
 .run-title { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .run-title p { font-weight: 600; font-size: 14px; margin-top: 2px; }
-.run-panel-head .status-pill { flex: none; }
+.run-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.run-panel-actions .status-pill { flex: none; }
+.run-panel-actions #cancelJobBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+}
+.run-panel-actions #cancelJobBtn:hover {
+  background: var(--err-bg);
+  border-color: var(--err);
+}
 
 .log-panel {
   margin-top: 14px;
@@ -1693,16 +1713,18 @@ h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
-.check-row {
+.check-row, .check-inline {
   display: flex;
   align-items: center;
   gap: 9px;
   font-size: 13.5px;
   color: var(--ink);
-  margin-top: 14px;
+  margin-top: 12px;
   cursor: pointer;
+  user-select: none;
 }
-.check-row input { width: 16px; height: 16px; accent-color: var(--brand); }
+.check-row input, .check-inline input { width: 16px; height: 16px; accent-color: var(--brand); cursor: pointer; flex-shrink: 0; }
+.check-inline span.material-symbols-outlined { color: var(--ink-faint); }
 
 /* Schedules table */
 .source-chips { display: flex; flex-wrap: wrap; gap: 6px; }

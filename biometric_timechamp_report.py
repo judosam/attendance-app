@@ -938,14 +938,29 @@ def file_consolidate(infiles):
             df = pd.read_excel(infile, dtype=str)
         combined_df = pd.concat([combined_df, df], ignore_index=True)
     print()
-    combined_df = combined_df.sort_values(by=['Employee ID', 'Employee Name', 'Date'])
-    combined_df.drop('SL No.', axis=1, inplace=True)
+    # Deduplicate overlapping date records across multiple input files
+    dedup_cols = [c for c in ['Employee ID', 'Date'] if c in combined_df.columns]
+    if len(dedup_cols) == 2:
+        temp_date = combined_df['Date'].apply(
+            lambda x: str(pd.to_datetime(x, errors='coerce').date()) if pd.notna(pd.to_datetime(x, errors='coerce')) else str(x).strip()
+        )
+        combined_df['_temp_date'] = temp_date
+        combined_df = combined_df.drop_duplicates(subset=['Employee ID', '_temp_date'], keep='last')
+        combined_df.drop(columns=['_temp_date'], inplace=True, errors='ignore')
+
+    sort_cols = [c for c in ['Employee ID', 'Employee Name', 'Date'] if c in combined_df.columns]
+    if sort_cols:
+        combined_df = combined_df.sort_values(by=sort_cols)
+    if 'SL No.' in combined_df.columns:
+        combined_df.drop('SL No.', axis=1, inplace=True, errors='ignore')
     combined_df.insert(0, 'SL No.', range(1, len(combined_df) + 1))
     
     # Apply styling df
     combined_df = combined_df.style.apply(break_highlight_status, axis=1)
-    combined_df = combined_df.map(Attendance_highlight_status, subset=['Attendance'])
-    combined_df = combined_df.map(Date_highlight_status, subset=['Date'])
+    if 'Attendance' in combined_df.columns:
+        combined_df = combined_df.map(Attendance_highlight_status, subset=['Attendance'])
+    if 'Date' in combined_df.columns:
+        combined_df = combined_df.map(Date_highlight_status, subset=['Date'])
     return combined_df
 
 

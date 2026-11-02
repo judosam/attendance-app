@@ -366,13 +366,13 @@ def delete_files_by_name(names):
 # Monthly compilation from already-generated daily reports
 # ---------------------------------------------------------------------------
 
-def compile_monthly(year: int, month: int, log=None, dest_dir=None) -> dict:
-    """Compile a month's RAW DATA from Drive into one monthly workbook.
+def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event=None) -> dict:
+    """Compile a month's RAW DATA into one monthly workbook.
 
-    Downloads every raw file in ``<folder>/<YYYY>/<month>/rawdata/``, groups
-    them by engine input type (Biometric CSV / Timechamp XLSX / Manual),
-    concatenates same-type raws into one file per type, runs the engine once
-    per type, and consolidates the generated reports into
+    Downloads every raw file in ``<folder>/<YYYY>/<month>/rawdata/`` (or falls
+    back to local files), strictly isolates records belonging to the selected
+    month, ignores duplicate data across multiple/overlapping date files,
+    runs the engine, and consolidates the generated reports into
     ``Monthly Attendance Compilation MM-YYYY.xlsx`` — uploaded to
     ``<folder>/<YYYY>/<month>/reports/`` (replacing any previous copy).
     """
@@ -383,21 +383,46 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None) -> dict:
         def log(message):
             pass
 
-    service, folder_id, folder_name = _drive_and_folder()
+    if cancel_event and cancel_event.is_set():
+        raise DriveError("Monthly compilation was cancelled by the user.")
 
-    year_dir = _find_child_folder(service, folder_id, str(year))
-    if not year_dir:
-        raise DriveError(
-            f"No '{year}' folder on Drive yet — no raw data has been backed up."
-        )
+    service, folder_id, folder_name = None, None, None
+    raw_files = []
+    month_label = date(year, month, 1).strftime("%B %Y")
     month_dir_name = _month_dir_name(year, month)
-    month_dir = _find_child_folder(service, year_dir, month_dir_name)
-    raw_files = _list_raw_files(service, month_dir) if month_dir else []
+    month_dir = None
+
+    try:
+        service, folder_id, folder_name = _drive_and_folder()
+        year_dir = _find_child_folder(service, folder_id, str(year))
+        if year_dir:
+            month_dir = _find_child_folder(service, year_dir, month_dir_name)
+            raw_files = _list_raw_files(service, month_dir) if month_dir else []
+    except Exception as drive_exc:
+        log(f"[Drive] Drive access notice: {drive_exc}")
+
+    # If Drive had no raw files, check for local raw files for this year and month
+    local_fallback_files = []
     if not raw_files:
-        month_label = date(year, month, 1).strftime("%B %Y")
+        log(f"[Monthly] Searching local workspace for {month_label} raw files...")
+        search_dirs = [
+            Path(APP_DIR) / str(year) / month_dir_name / "rawdata",
+            Path(APP_DIR) / str(year) / month_dir_name,
+            Path(APP_DIR) / "workspace" / "jobs",
+        ]
+        for sdir in search_dirs:
+            if sdir.is_dir():
+                for p in sdir.rglob("*"):
+                    if p.is_file() and p.suffix.lower() in (".csv", ".xls", ".xlsx"):
+                        if not p.name.lower().startswith("monthly") and not p.name.lower().startswith("~"):
+                            local_fallback_files.append(p)
+        if local_fallback_files:
+            log(f"[Monthly] Located {len(local_fallback_files)} potential local raw file(s).")
+
+    if not raw_files and not local_fallback_files:
         raise DriveError(
             f"No raw data files found for {month_label} on Drive "
-            f"({year}/{month_dir_name}/rawdata). Generate and back up some runs first."
+            f"({year}/{month_dir_name}/rawdata) or locally. Generate and back up some runs first."
         )
 
     import tempfile
@@ -405,23 +430,33 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None) -> dict:
     import pandas as pd
     from biometric_timechamp_report import run_report
 
-    month_label = date(year, month, 1).strftime("%B %Y")
-    month_dir_name = _month_dir_name(year, month)
-    log(f"[Drive] Compiling monthly report for {month_label} "
-        f"from {len(raw_files)} raw data file(s)...")
+    log(f"[Drive] Compiling monthly report for {month_label}...")
     output = None
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         raw_dir = td_path / "raw"
         raw_dir.mkdir()
 
-        # ---- Download all raw files for the month ------------------------
+        if cancel_event and cancel_event.is_set():
+            raise DriveError("Monthly compilation was cancelled by the user.")
+
+        # ---- Download or copy raw files ---------------------------------
         local_raws = []
-        for f in raw_files:
-            target = raw_dir / f["name"]
-            _download_file(service, f["id"], target)
-            local_raws.append(target)
-            log(f"[Drive]   fetched raw: {f['name']}")
+        if raw_files and service:
+            for f in raw_files:
+                if cancel_event and cancel_event.is_set():
+                    raise DriveError("Monthly compilation was cancelled by the user.")
+                target = raw_dir / f["name"]
+                _download_file(service, f["id"], target)
+                local_raws.append(target)
+                log(f"[Drive]   fetched raw: {f['name']}")
+        else:
+            for lf in local_fallback_files:
+                target = raw_dir / lf.name
+                if not target.exists():
+                    shutil.copy2(lf, target)
+                    local_raws.append(target)
+                    log(f"[Monthly]   using local raw: {lf.name}")
 
         # ---- Group by engine input type ----------------------------------
         def raw_type(path: Path) -> str:
@@ -440,30 +475,99 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None) -> dict:
 
         generated = []
         for type_name, paths in sorted(groups.items()):
-            if type_name == "manual":
-                for p in paths:
-                    log(f"[Drive] Processing raw file: {p.name}")
-                    generated.append(
-                        Path(run_report([str(p)], td, fancy_progress=False)))
-                continue
-            # Concatenate same-type raws into one file, then ONE engine run.
-            log(f"[Drive] Merging {len(paths)} {type_name} raw file(s)...")
+            if cancel_event and cancel_event.is_set():
+                raise DriveError("Monthly compilation was cancelled by the user.")
+
+            log(f"[Drive] Reading and consolidating {len(paths)} {type_name} raw file(s)...")
             frames = []
             for p in sorted(paths, key=lambda x: x.name):
-                if p.suffix.lower() == ".csv":
-                    frames.append(pd.read_csv(p, dtype=str, keep_default_na=False))
-                else:
-                    frames.append(pd.read_excel(p, dtype=str))
+                try:
+                    if p.suffix.lower() == ".csv":
+                        frames.append(pd.read_csv(p, dtype=str, keep_default_na=False))
+                    else:
+                        frames.append(pd.read_excel(p, dtype=str))
+                except Exception as read_err:
+                    log(f"[Drive] Warning: could not parse {p.name}: {read_err}")
+            if not frames:
+                continue
+
             combined = pd.concat(frames, ignore_index=True)
+            combined.columns = [str(c).strip() for c in combined.columns]
+
+            # 1. Filter strictly to the selected month and year
+            date_col = next((c for c in combined.columns if c.lower() == 'date'), None)
+            if date_col:
+                parsed_dates = pd.to_datetime(
+                    combined[date_col].astype(str).str.strip(), errors='coerce', format='mixed'
+                )
+                month_mask = (parsed_dates.dt.year == year) & (parsed_dates.dt.month == month)
+                before_filter = len(combined)
+                combined = combined[month_mask].copy()
+                out_of_month = before_filter - len(combined)
+                if out_of_month > 0:
+                    log(f"[Drive] Filtered to {month_label}: ignored {out_of_month} record(s) outside selected month.")
+
+            if len(combined) == 0:
+                log(f"[Drive] Note: No records found for {type_name} in {month_label}.")
+                continue
+
+            # 2. Ignore duplicate data across multiple date files
+            emp_col = next(
+                (c for c in ['Employee Code', 'Employee ID', 'Employee Id', 'User', 'Employee Name']
+                 if c in combined.columns),
+                None
+            )
+            if date_col and emp_col:
+                # Standardize Date column values to YYYY-MM-DD for accurate deduplication
+                parsed_clean = pd.to_datetime(
+                    combined[date_col].astype(str).str.strip(), errors='coerce', format='mixed'
+                )
+                valid_mask = parsed_clean.notna()
+                combined.loc[valid_mask, date_col] = parsed_clean[valid_mask].dt.strftime('%Y-%m-%d')
+                combined[emp_col] = combined[emp_col].astype(str).str.strip()
+
+                # Prioritize rows with actual punches or working hours
+                if 'Punch Records' in combined.columns:
+                    combined['__p_score'] = combined['Punch Records'].astype(str).str.strip().str.len()
+                    combined = combined.sort_values(by='__p_score', ascending=True).drop(columns=['__p_score'])
+                elif 'Working Hours' in combined.columns:
+                    combined['__h_score'] = combined['Working Hours'].astype(str).str.strip().str.len()
+                    combined = combined.sort_values(by='__h_score', ascending=True).drop(columns=['__h_score'])
+
+                before_dedup = len(combined)
+                combined = combined.drop_duplicates(subset=[date_col, emp_col], keep='last')
+                dedup_removed = before_dedup - len(combined)
+                if dedup_removed > 0:
+                    log(f"[Drive] Ignored {dedup_removed} duplicate employee-date record(s) across overlapping files.")
+            else:
+                before_dedup = len(combined)
+                combined = combined.drop_duplicates()
+                if len(combined) < before_dedup:
+                    log(f"[Drive] Ignored {before_dedup - len(combined)} identical duplicate row(s).")
+
+            if cancel_event and cancel_event.is_set():
+                raise DriveError("Monthly compilation was cancelled by the user.")
+
+            # Save clean merged file and run engine
             if type_name == "biometric":
                 merged_path = raw_dir / f"biometric_month_{month:02d}_{year}.csv"
                 combined.to_csv(merged_path, index=False)
-            else:
+            elif type_name == "timechamp":
                 merged_path = raw_dir / f"timechamp_month_{month:02d}_{year}.xlsx"
                 combined.to_excel(merged_path, index=False)
-            log(f"[Drive] Processing {type_name} raw data through the engine...")
-            generated.append(
-                Path(run_report([str(merged_path)], td, fancy_progress=False)))
+            else:
+                merged_path = raw_dir / f"manual_month_{month:02d}_{year}.xlsx"
+                combined.to_excel(merged_path, index=False)
+
+            log(f"[Drive] Processing {type_name} data ({len(combined)} rows) through the report engine...")
+            gen_res = Path(run_report([str(merged_path)], td, fancy_progress=False))
+            generated.append(gen_res)
+
+        if not generated:
+            raise DriveError(f"No valid raw records found for {month_label} to compile.")
+
+        if cancel_event and cancel_event.is_set():
+            raise DriveError("Monthly compilation was cancelled by the user.")
 
         # ---- Consolidate generated reports into the monthly workbook ----
         if len(generated) == 1:
@@ -475,30 +579,33 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None) -> dict:
 
         final_name = MONTHLY_NAME.format(month=month, year=year) + ".xlsx"
         output = output.rename(output.with_name(final_name))
-        log(f"[Drive] Monthly workbook: {output.name}")
+        log(f"[Drive] Monthly workbook ready: {output.name}")
 
         if dest_dir:
             dest = Path(dest_dir)
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(output, dest / output.name)
 
-        # Upload to the month's reports bucket, replacing any previous copy.
-        reports_dir = ensure_subfolder(service, month_dir, "reports", cache={})
-        _replace_drive_file(service, reports_dir, output)
-        log(f"[Drive] Uploaded monthly report: {output.name}")
+        # Upload to the month's reports bucket if Drive is available
+        if service and month_dir:
+            try:
+                reports_dir = ensure_subfolder(service, month_dir, "reports", cache={})
+                _replace_drive_file(service, reports_dir, output)
+                log(f"[Drive] Uploaded monthly report: {output.name}")
+            except Exception as up_err:
+                log(f"[Drive] Notice: Drive upload skipped ({up_err})")
 
     # The temp dir is gone now — point the record at the persistent copy
-    # so downloads from history keep working.
     if dest_dir:
         output = Path(dest_dir) / output.name
 
     return {
         "month": date(year, month, 1).strftime("%B"),
         "year": year,
-        "files": len(raw_files),
+        "files": len(raw_files) or len(local_fallback_files),
         "output_name": output.name,
         "output_path": str(output),
-        "folder": folder_name,
+        "folder": folder_name or "Local",
     }
 
 

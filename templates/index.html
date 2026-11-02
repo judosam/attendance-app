@@ -131,6 +131,16 @@
               <span class="material-symbols-outlined" style="font-size:17px;">backup</span>
               <span>Back up raw data &amp; report to Google Drive</span>
             </label>
+            <label class="check-inline" for="fetchMail">
+              <input type="checkbox" id="fetchMail">
+              <span class="material-symbols-outlined" style="font-size:17px;">mail</span>
+              <span>Send report via email</span>
+            </label>
+            <div id="fetchMailRow" class="field" style="margin-top:8px; max-width:520px;" hidden>
+              <label for="fetchMailTo">Email recipients (comma-separated)</label>
+              <input id="fetchMailTo" type="text" placeholder="hr@company.com, manager@company.com" spellcheck="false">
+              <p class="hint" style="margin-top:2px;">Leave empty to use default recipients from Settings → Email delivery.</p>
+            </div>
             <div class="action-row" style="margin-top:14px;">
               <button type="button" id="fetchBtn" class="btn btn-primary btn-lg">
                 <span class="material-symbols-outlined" style="font-size:18px;">cloud_download</span>
@@ -164,6 +174,16 @@
               <span class="material-symbols-outlined" style="font-size:17px;">backup</span>
               <span>Back up raw data &amp; report to Google Drive</span>
             </label>
+            <label class="check-inline" for="uploadMail">
+              <input type="checkbox" id="uploadMail">
+              <span class="material-symbols-outlined" style="font-size:17px;">mail</span>
+              <span>Send report via email</span>
+            </label>
+            <div id="uploadMailRow" class="field" style="margin-top:8px; max-width:520px;" hidden>
+              <label for="uploadMailTo">Email recipients (comma-separated)</label>
+              <input id="uploadMailTo" type="text" placeholder="hr@company.com, manager@company.com" spellcheck="false">
+              <p class="hint" style="margin-top:2px;">Leave empty to use default recipients from Settings → Email delivery.</p>
+            </div>
             <div class="action-row" style="margin-top:14px;">
               <button type="button" id="runBtn" class="btn btn-primary btn-lg" disabled>Generate Audited Report</button>
             </div>
@@ -215,7 +235,13 @@
                   <p id="statusText">Starting…</p>
                 </div>
               </div>
-              <span class="status-pill" data-status="running">Running</span>
+              <div class="run-panel-actions">
+                <span class="status-pill" data-status="running">Running</span>
+                <button type="button" id="cancelJobBtn" class="btn btn-sm btn-danger-ghost" title="Cancel this generation run">
+                  <span class="material-symbols-outlined" style="font-size:16px;">cancel</span>
+                  <span>Cancel</span>
+                </button>
+              </div>
             </header>
             <div class="progress-track" role="progressbar" aria-label="Report generation"
                  aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">

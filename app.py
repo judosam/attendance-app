@@ -114,6 +114,10 @@ app.secret_key = _load_secret_key()
 JOBS_STATE = {}
 JOBS_LOCK = threading.Lock()
 
+# Subprocess & cancellation registries (guarded by JOBS_LOCK)
+ACTIVE_PROCS = {}  # job_id -> subprocess.Popen
+ACTIVE_CANCEL_FLAGS = {}  # job_id -> threading.Event
+
 # Restart-safe run history: list[dict] cached in memory, persisted to
 # workspace/history.json (guarded by HISTORY_LOCK).
 HISTORY_STORE = None
@@ -123,6 +127,37 @@ HISTORY_LOCK = threading.Lock()
 # --------------------------------------------------------------------------
 # Live job helpers (in-memory)
 # --------------------------------------------------------------------------
+
+def is_job_cancelled(job_id):
+    flag = ACTIVE_CANCEL_FLAGS.get(job_id)
+    return flag is not None and flag.is_set()
+
+
+def cancel_job(job_id):
+    """Signal job worker and kill any running engine subprocess."""
+    flag = ACTIVE_CANCEL_FLAGS.get(job_id)
+    if flag is not None:
+        flag.set()
+    with JOBS_LOCK:
+        proc = ACTIVE_PROCS.get(job_id)
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        job = JOBS_STATE.get(job_id)
+        if job is not None and job.get("status") in ("queued", "running"):
+            job["status"] = "error"
+            job["error"] = "Generation was cancelled by the user."
+            job["ended"] = time.time()
+            log_line(job_id, "[Cancel] Generation cancelled by user.")
+    upsert_history({
+        "id": job_id,
+        "status": "error",
+        "error": "Cancelled by user",
+        "ended": time.time(),
+    })
+
 
 def log_line(job_id, line):
     """Append one console line to a job's log (safe from any thread)."""
@@ -460,17 +495,80 @@ def find_output(job_id):
     return path
 
 
+def _send_report_email_if_requested(job_id, final_output, email_to, log, schedule_name=None):
+    """Send generated report via email if requested; never fails the job."""
+    if not email_to:
+        return None
+    try:
+        import mailer
+        mail_settings = mailer.load_mail_settings()
+        recipients = mail_settings.get("recipients") if email_to == "__DEFAULT__" else email_to
+        if not recipients:
+            msg = "No recipients specified. Configure default recipients in Settings → Email delivery."
+            log(f"[Mail] EMAIL SKIPPED: {msg}")
+            with JOBS_LOCK:
+                JOBS_STATE[job_id]["email_error"] = msg
+            return msg
+        mail_settings["recipients"] = recipients
+        log(f"[Mail] Emailing report to {recipients}...")
+        stats = None
+        duration = None
+        with JOBS_LOCK:
+            started_at = JOBS_STATE[job_id].get("started")
+            ended_at = JOBS_STATE[job_id].get("ended")
+        if started_at and ended_at:
+            duration = int(max(ended_at - started_at, 0))
+        try:
+            stats = engine_stats.save_analytics(
+                Path(final_output), job_dir(job_id) / "analytics.json"
+            )
+        except Exception as exc:
+            log(f"[Mail] (Email stats unavailable: {exc})")
+        meta_note = (f"Schedule: {schedule_name}" if schedule_name else "")
+        if duration is not None:
+            meta_note = (meta_note + " · " if meta_note else "") \
+                + f"Run duration {duration // 60}m {duration % 60}s"
+        mailer.send_report_email(
+            Path(final_output),
+            subject=(f"Attendance Report {Path(final_output).stem}"
+                     + (f" (schedule: {schedule_name})" if schedule_name else "")),
+            settings=mail_settings,
+            log=log,
+            stats=stats,
+            meta_note=meta_note,
+        )
+        log(f"[Mail] Email delivered to {recipients}.")
+        with JOBS_LOCK:
+            JOBS_STATE[job_id]["email_sent_to"] = recipients
+        return None
+    except mailer.MailError as exc:
+        mail_error = str(exc)
+        log(f"[Mail] EMAIL FAILED: {exc}")
+        with JOBS_LOCK:
+            JOBS_STATE[job_id]["email_error"] = mail_error
+        return mail_error
+    except Exception as exc:
+        mail_error = str(exc)
+        log(f"[Mail] EMAIL FAILED: {exc}")
+        with JOBS_LOCK:
+            JOBS_STATE[job_id]["email_error"] = mail_error
+        return mail_error
+
+
 # --------------------------------------------------------------------------
 # Engine runner
 # --------------------------------------------------------------------------
 
 def run_job_worker(job_id):
     """Execute the engine in an isolated subprocess and stream its output."""
+    if is_job_cancelled(job_id):
+        return
     with JOBS_LOCK:
         paths = list(JOBS_STATE[job_id]["input_paths"])
         JOBS_STATE[job_id]["status"] = "running"
         JOBS_STATE[job_id]["started"] = time.time()
         trigger = JOBS_STATE[job_id].get("trigger") or "Manual upload"
+        email_to = JOBS_STATE[job_id].get("email_to")
     upsert_history({"id": job_id, "status": "running", "started": time.time(), "trigger": trigger})
 
     manifest = {"files": paths, "base_dir": str(job_dir(job_id))}
@@ -490,6 +588,8 @@ def run_job_worker(job_id):
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     try:
+        if is_job_cancelled(job_id):
+            return
         proc = subprocess.Popen(
             [sys.executable, "-c", snippet, str(manifest_path)],
             cwd=str(APP_DIR),
@@ -501,10 +601,14 @@ def run_job_worker(job_id):
             env=environment,
             creationflags=creationflags,
         )
+        with JOBS_LOCK:
+            ACTIVE_PROCS[job_id] = proc
 
         def pump_output():
             try:
                 for raw in proc.stdout:
+                    if is_job_cancelled(job_id):
+                        break
                     log_line(job_id, raw.rstrip("\r\n"))
             except Exception:
                 pass
@@ -513,6 +617,9 @@ def run_job_worker(job_id):
         pump.start()
         proc.wait(timeout=JOB_TIMEOUT_SECONDS)
         pump.join(timeout=10)
+
+        if is_job_cancelled(job_id):
+            return
 
         output = find_output(job_id)
         if proc.returncode == 0 and output is not None:
@@ -534,7 +641,14 @@ def run_job_worker(job_id):
                 "output_name": output.name,
                 "output_folder": str(output.parent),
             })
+            # Optional email delivery if requested
+            if email_to:
+                _send_report_email_if_requested(
+                    job_id, output, email_to, lambda m: log_line(job_id, m)
+                )
         else:
+            if is_job_cancelled(job_id):
+                return
             tail = []
             with JOBS_LOCK:
                 tail = JOBS_STATE[job_id]["logs"][-12:]
@@ -551,7 +665,12 @@ def run_job_worker(job_id):
             "Try a smaller file or run the original script directly.",
         )
     except Exception as exc:  # unexpected server-side failure
-        job_error(job_id, f"Server error while running the engine: {exc}")
+        if not is_job_cancelled(job_id):
+            job_error(job_id, f"Server error while running the engine: {exc}")
+    finally:
+        with JOBS_LOCK:
+            ACTIVE_PROCS.pop(job_id, None)
+            ACTIVE_CANCEL_FLAGS.pop(job_id, None)
 
 
 # --------------------------------------------------------------------------
@@ -644,8 +763,10 @@ def api_run():
     trigger = (request.form.get("trigger") or "Manual upload").strip()[:40]
     range_label = (request.form.get("range_label") or "").strip()[:120] or None
     drive_upload = str(request.form.get("drive_upload") or "").lower() in ("1", "true", "yes", "on")
+    email_to = (request.form.get("email_to") or "").strip() or None
 
     with JOBS_LOCK:
+        ACTIVE_CANCEL_FLAGS[job_id] = threading.Event()
         JOBS_STATE[job_id] = {
             "id": job_id,
             "status": "queued",
@@ -663,6 +784,7 @@ def api_run():
             "trigger": trigger,
             "range_label": range_label,
             "drive_upload": drive_upload,
+            "email_to": email_to,
         }
     upsert_history({
         "id": job_id,
@@ -807,6 +929,9 @@ def _run_engine_sync(job_id, files, log):
     Streams engine stdout into the job's log as it goes. Raises ValueError
     with the meaningful log tail on failure (the job folder is kept).
     """
+    if is_job_cancelled(job_id):
+        raise ValueError("Generation was cancelled by the user.")
+
     manifest = {"files": [str(f) for f in files], "base_dir": str(job_dir(job_id))}
     manifest_path = job_dir(job_id) / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -826,7 +951,16 @@ def _run_engine_sync(job_id, files, log):
             env=environment,
             creationflags=creationflags,
         )
+        with JOBS_LOCK:
+            ACTIVE_PROCS[job_id] = proc
+
         for raw in proc.stdout:
+            if is_job_cancelled(job_id):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                raise ValueError("Generation was cancelled by the user.")
             log(raw.rstrip("\r\n"))
         code = proc.wait(timeout=JOB_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -835,7 +969,15 @@ def _run_engine_sync(job_id, files, log):
             f"The report engine timed out after {JOB_TIMEOUT_SECONDS // 60} minutes."
         )
     except Exception as exc:
+        if is_job_cancelled(job_id):
+            raise ValueError("Generation was cancelled by the user.")
         raise ValueError(f"Could not start the report engine: {exc}")
+    finally:
+        with JOBS_LOCK:
+            ACTIVE_PROCS.pop(job_id, None)
+
+    if is_job_cancelled(job_id):
+        raise ValueError("Generation was cancelled by the user.")
 
     output = find_output(job_id)
     if code != 0 or output is None:
@@ -874,12 +1016,16 @@ def _fetched_job_worker(job_id, sources, from_day, to_day, schedule_name=None,
         # ---- Phase 1: portal downloads -----------------------------------
         saved = []
         for source in sources:
+            if is_job_cancelled(job_id):
+                raise ValueError("Generation was cancelled by the user.")
             label = "Biometric" if source == "biometric" else "TimeChamp"
             log(f"[{label}] Login & raw data download starting...")
             path, _label = fetchers.FETCHERS[source](
                 input_dir, from_day, to_day,
                 fetchers.load_settings().get(source), log=log,
             )
+            if is_job_cancelled(job_id):
+                raise ValueError("Generation was cancelled by the user.")
             # Each raw file is validated alone: two raw flavours together
             # would look like the engine's consolidate branch (which needs
             # already-generated reports, not raw data).
@@ -892,11 +1038,15 @@ def _fetched_job_worker(job_id, sources, from_day, to_day, schedule_name=None,
         # ---- Phase 2: engine per raw file ---------------------------------
         generated = []
         if len(saved) == 1:
+            if is_job_cancelled(job_id):
+                raise ValueError("Generation was cancelled by the user.")
             log("Processing raw data through the report engine...")
             output = _run_engine_sync(job_id, saved, log)
             generated.append(output)
         else:
             for raw in saved:
+                if is_job_cancelled(job_id):
+                    raise ValueError("Generation was cancelled by the user.")
                 label = ("Biometric" if "biometric" in Path(raw).name
                          else "Timechamp")
                 log(f"Processing {label} raw data through the report engine...")
@@ -905,15 +1055,18 @@ def _fetched_job_worker(job_id, sources, from_day, to_day, schedule_name=None,
                 log(f"{label} report generated: {Path(output).name}")
 
         # ---- Phase 3: consolidate into the final report -------------------
+        if is_job_cancelled(job_id):
+            raise ValueError("Generation was cancelled by the user.")
         final_output = generated[0]
         if len(generated) > 1:
             log("Consolidating generated reports into the final combined report...")
             final_output = _run_engine_sync(job_id, generated, log)
             log(f"Final consolidated report: {Path(final_output).name}")
 
+        if is_job_cancelled(job_id):
+            raise ValueError("Generation was cancelled by the user.")
+
         # ---- Phase 4: Google Drive backup (raw + reports) -----------------
-        # Runs BEFORE the done-transition so a local delete afterwards can
-        # always find the Drive copies, and the UI reports the final state.
         _upload_run_to_drive(job_id, log)
 
         with JOBS_LOCK:
@@ -933,54 +1086,23 @@ def _fetched_job_worker(job_id, sources, from_day, to_day, schedule_name=None,
         })
 
         # ---- Phase 5: optional email with the report attached -------------
-        mail_error = None
         if email_to:
-            log(f"Emailing the report to {email_to}...")
-            try:
-                import mailer
-                mail_settings = mailer.load_mail_settings()
-                mail_settings["recipients"] = email_to
-                # Compute stats for the email (also cached for the dashboard).
-                stats = None
-                duration = None
-                with JOBS_LOCK:
-                    started_at = JOBS_STATE[job_id].get("started")
-                    ended_at = JOBS_STATE[job_id].get("ended")
-                if started_at and ended_at:
-                    duration = int(max(ended_at - started_at, 0))
-                try:
-                    stats = engine_stats.save_analytics(
-                        Path(final_output), job_dir(job_id) / "analytics.json"
-                    )
-                except Exception as exc:
-                    log(f"(Email stats unavailable: {exc})")
-                meta_note = (f"Schedule: {schedule_name}" if schedule_name else "")
-                if duration is not None:
-                    meta_note = (meta_note + " · " if meta_note else "") \
-                        + f"Run duration {duration // 60}m {duration % 60}s"
-                mailer.send_report_email(
-                    Path(final_output),
-                    subject=(f"Attendance Report {Path(final_output).stem}"
-                             + (f" (schedule: {schedule_name})" if schedule_name else "")),
-                    settings=mail_settings,
-                    log=log,
-                    stats=stats,
-                    meta_note=meta_note,
-                )
-            except mailer.MailError as exc:
-                mail_error = str(exc)
-                log(f"EMAIL FAILED: {exc}")
-            except Exception as exc:  # unexpected mail failure
-                mail_error = str(exc)
-                log(f"EMAIL FAILED: {exc}")
-        if mail_error:
-            with JOBS_LOCK:
-                JOBS_STATE[job_id]["email_error"] = mail_error
+            _send_report_email_if_requested(
+                job_id, final_output, email_to, log, schedule_name=schedule_name
+            )
         return
     except ValueError as exc:
+        if is_job_cancelled(job_id):
+            return
         job_error(job_id, str(exc))
     except Exception as exc:  # unexpected
+        if is_job_cancelled(job_id):
+            return
         job_error(job_id, f"Unexpected server error: {exc}")
+    finally:
+        with JOBS_LOCK:
+            ACTIVE_PROCS.pop(job_id, None)
+            ACTIVE_CANCEL_FLAGS.pop(job_id, None)
 
 
 def _start_fetch_job(sources, from_day, to_day, trigger, schedule_name=None,
@@ -1000,6 +1122,7 @@ def _start_fetch_job(sources, from_day, to_day, trigger, schedule_name=None,
                   else "Timechamp" if sources == ["timechamp"]
                   else "Consolidated")
     with JOBS_LOCK:
+        ACTIVE_CANCEL_FLAGS[job_id] = threading.Event()
         JOBS_STATE[job_id] = {
             "id": job_id,
             "status": "queued",
@@ -1018,6 +1141,7 @@ def _start_fetch_job(sources, from_day, to_day, trigger, schedule_name=None,
             "range_label": range_label,
             "schedule": schedule_name,
             "drive_upload": bool(drive_upload),
+            "email_to": email_to,
         }
     upsert_history({
         "id": job_id,
@@ -1466,7 +1590,9 @@ def _start_compile_job(schedule, year, month):
     title = f"Monthly compilation {month:02d}-{year}" + (
         f" · {schedule.get('name')}" if schedule else "")
     trigger = "Scheduled" if schedule else "Manual"
+    cancel_event = threading.Event()
     with JOBS_LOCK:
+        ACTIVE_CANCEL_FLAGS[job_id] = cancel_event
         JOBS_STATE[job_id] = {
             "id": job_id,
             "status": "queued",
@@ -1510,6 +1636,7 @@ def _start_compile_job(schedule, year, month):
             result = gdrive_mod.compile_monthly(
                 year, month, log=log,
                 dest_dir=target_dir,
+                cancel_event=cancel_event,
             )
             output = Path(result["output_path"])
             with JOBS_LOCK:
@@ -1569,13 +1696,22 @@ def _start_compile_job(schedule, year, month):
             if schedule:
                 _mark_schedule_fired(schedule["id"], f"done (monthly compiled)", job_id)
         except gdrive_mod.DriveError as exc:
+            if is_job_cancelled(job_id):
+                return
             log(f"MONTHLY COMPILE FAILED: {exc}")
             job_error(job_id, str(exc))
-            _mark_schedule_fired(schedule["id"], f"error: {str(exc)[:100]}")
+            if schedule:
+                _mark_schedule_fired(schedule["id"], f"error: {str(exc)[:100]}")
         except Exception as exc:
+            if is_job_cancelled(job_id):
+                return
             log(f"MONTHLY COMPILE FAILED: {exc}")
             job_error(job_id, f"Monthly compilation failed: {exc}")
-            _mark_schedule_fired(schedule["id"], f"error: {str(exc)[:100]}")
+            if schedule:
+                _mark_schedule_fired(schedule["id"], f"error: {str(exc)[:100]}")
+        finally:
+            with JOBS_LOCK:
+                ACTIVE_CANCEL_FLAGS.pop(job_id, None)
 
     threading.Thread(target=worker, daemon=True).start()
     return job_id
@@ -1904,6 +2040,13 @@ def api_job(job_id):
         if job.get("started"):
             payload["elapsed"] = round(time.time() - job["started"], 1)
     return jsonify(payload)
+
+
+@app.post("/api/jobs/<job_id>/cancel")
+def api_job_cancel(job_id):
+    """Cancel a running report generation or monthly compilation."""
+    cancel_job(job_id)
+    return jsonify({"ok": True, "status": "cancelled"})
 
 
 @app.get("/api/jobs/<job_id>/download")
