@@ -26,6 +26,7 @@ Drive copies are deleted too. History pruning never touches Drive.
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import date
 from pathlib import Path
