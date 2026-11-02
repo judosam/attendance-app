@@ -1,5 +1,24 @@
 # Version History
 
+## [v2.2.1] — 2026-11-02
+
+### Type
+Hotfix & UI Layout Release / Production Deployment
+
+### Fixed
+- **Biometric Portal Timeout**:
+  - Increased HTTP connection/read timeout for biometric daily attendance export from 180s to 360s in `fetchers.py` to prevent `Read timed out` failures on large date ranges.
+  - Increased report page initial GET timeout from 60s to 120s.
+- **Monthly Dialog Layout & Visibility**:
+  - Fixed `#monthlyDialog` viewport overflow where header and action footer were pushed off-screen.
+  - Pinned modal header (`<h2>`, description) and modal actions footer (`Cancel`, `Compile` buttons) using `flex-shrink: 0`.
+  - Constrained dialog to `max-height: min(90vh, 700px)` with internal auto-scroll on the compilation log panel (`min-height: 140px; max-height: min(34vh, 260px)`).
+- **Date Parsing & `NaTType does not support strftime`**:
+  - Resolved `NaTType does not support strftime` across `process_timechamp_data`, `save_output_file`, `final_adjustments`, and `run_report`.
+  - Added flexible format parsing (`format='mixed'`) supporting ISO `YYYY-MM-DD`, `%b-%d-%Y`, and mixed portal date stamps without turning rows into `NaT`.
+  - Guarded all `min_date` and `max_date` calculations against `NaT`.
+  - Streamlined engine stdout into monthly compilation log so users see real-time progress.
+
 ## [v2.2.0] — 2026-11-02
 
 ### Type
