@@ -25,7 +25,11 @@ dt1 = now.strftime("%b-%d")
 
 # Get the filename of the current script
 filename = os.path.splitext(os.path.basename(__file__))[0]
-os.system(f'title {filename}')
+if os.name == 'nt':
+    try:
+        os.system(f'title {filename}')
+    except Exception:
+        pass
 
 
 # Function to extract in and out events from punch records
@@ -385,13 +389,13 @@ def get_hr_user_ids():
 
 def save_output_file(df, source_type, folder_path):
     """Save the output file with proper naming."""
-    min_date = df['Date'].min()
-    max_date = df['Date'].max()
-    
-    if isinstance(min_date, str):
-        min_date = pd.to_datetime(min_date)
-    if isinstance(max_date, str):
-        max_date = pd.to_datetime(max_date)
+    valid_dates = pd.to_datetime(df['Date'], errors='coerce').dropna()
+    if len(valid_dates) > 0:
+        min_date = valid_dates.min()
+        max_date = valid_dates.max()
+    else:
+        min_date = pd.Timestamp.now()
+        max_date = pd.Timestamp.now()
     
     min_date_str = min_date.strftime('%d-%b-%Y')
     max_date_str = max_date.strftime('%d-%b-%Y')
@@ -477,13 +481,18 @@ def final_adjustments(df):
     # df.loc[df['Employee ID'].isin(['1271', '1121', '1122', '1070', '1272', '1231', '1331', '1081', '1016', '1037', '1020', '1260', '1206', '1071', '1129', '1098', '1042', '1061', '1229', '1087', '1058', '1056']), 'Early Logout Status'] = pd.NaT
     # df.loc[df['Attendance'].isin(['Absent','Half day','WeekOff']), 'Early Logout Status'] = pd.NaT
 
-    df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='coerce')
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce', format='mixed')
     # print(df['Date'])
     df['Day'] = df['Date'].dt.strftime('%a')
     df.loc[(df['Day'].isin(['Sat', 'Sun'])) & (df['Worked Hours'].isnull()), 'Attendance'] = 'WeekOff'
     
-    min_date = df['Date'].min().strftime('%Y-%m-%d')
-    max_date = df['Date'].max().strftime('%Y-%m-%d')
+    valid_dates = df['Date'].dropna()
+    if len(valid_dates) > 0:
+        min_date = valid_dates.min().strftime('%Y-%m-%d')
+        max_date = valid_dates.max().strftime('%Y-%m-%d')
+    else:
+        min_date = datetime.now().strftime('%Y-%m-%d')
+        max_date = datetime.now().strftime('%Y-%m-%d')
     
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
     
@@ -822,8 +831,11 @@ def process_timechamp_data(df):
     print("Stage: processing timechamp attendance data", flush=True)
     # df['Date']
     try:
-        df['Date'] = pd.to_datetime(df['Date'].str.strip(), format='%b-%d-%Y', errors='coerce')
-        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+        dt_parsed = pd.to_datetime(df['Date'].astype(str).str.strip(), errors='coerce', format='mixed')
+        if dt_parsed.isna().all():
+            dt_parsed = pd.to_datetime(df['Date'].astype(str).str.strip(), format='%b-%d-%Y', errors='coerce')
+        valid_dt = dt_parsed.notna()
+        df.loc[valid_dt, 'Date'] = dt_parsed[valid_dt].dt.strftime('%Y-%m-%d')
     except Exception as e:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce', format='mixed').dt.strftime('%Y-%m-%d')
     # print(df['Date'])
@@ -1025,9 +1037,14 @@ def run_report(infiles, base_dir=None, fancy_progress=True):
     print("Writing styled Excel workbook (3 sheets)...", flush=True)
 
     df_date = df.data.copy()
-    df_date['Date'] = pd.to_datetime(df_date['Date'], format='%Y-%m-%d', dayfirst=True)
-    min_date = df_date['Date'].min()
-    max_date = df_date['Date'].max()
+    df_date['Date'] = pd.to_datetime(df_date['Date'], errors='coerce', format='mixed')
+    valid_d = df_date['Date'].dropna()
+    if len(valid_d) > 0:
+        min_date = valid_d.min()
+        max_date = valid_d.max()
+    else:
+        min_date = pd.Timestamp.now()
+        max_date = pd.Timestamp.now()
     min_date_str = min_date.strftime('%d-%b-%Y')
     max_date_str = max_date.strftime('%d-%b-%Y')
 

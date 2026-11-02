@@ -249,7 +249,7 @@ def fetch_biometric(target_dir, from_day, to_day, settings=None, log=None):
     }
 
     log("Opening Daily Attendance Report page...")
-    page = session.get(report_url, headers=headers, timeout=60, verify=False)
+    page = session.get(report_url, headers=headers, timeout=120, verify=False)
     page.raise_for_status()
     viewstate = _input_value(page.text, "__VIEWSTATE")
     generator = _input_value(page.text, "__VIEWSTATEGENERATOR")
@@ -281,7 +281,7 @@ def fetch_biometric(target_dir, from_day, to_day, settings=None, log=None):
     }
     log(f"Generating CSV export for {from_day.isoformat()} → {to_day.isoformat()} "
         "(Recalculate Attendance: ON)...")
-    response = session.post(report_url, data=form, headers=headers, timeout=180, verify=False)
+    response = session.post(report_url, data=form, headers=headers, timeout=360, verify=False)
     response.raise_for_status()
 
     body = response.content

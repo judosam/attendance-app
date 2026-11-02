@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -367,6 +368,23 @@ def delete_files_by_name(names):
 # Monthly compilation from already-generated daily reports
 # ---------------------------------------------------------------------------
 
+class _StdoutToLog:
+    def __init__(self, log_func):
+        self.log_func = log_func
+        self.buf = ""
+    def write(self, s):
+        self.buf += s
+        while "\n" in self.buf:
+            line, self.buf = self.buf.split("\n", 1)
+            line = line.strip()
+            if line:
+                self.log_func(line)
+    def flush(self):
+        if self.buf.strip():
+            self.log_func(self.buf.strip())
+            self.buf = ""
+
+
 def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event=None) -> dict:
     """Compile a month's RAW DATA into one monthly workbook.
 
@@ -504,6 +522,8 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
                 month_mask = (parsed_dates.dt.year == year) & (parsed_dates.dt.month == month)
                 before_filter = len(combined)
                 combined = combined[month_mask].copy()
+                # Standardize Date column values directly to YYYY-MM-DD
+                combined[date_col] = parsed_dates[month_mask].dt.strftime('%Y-%m-%d')
                 out_of_month = before_filter - len(combined)
                 if out_of_month > 0:
                     log(f"[Drive] Filtered to {month_label}: ignored {out_of_month} record(s) outside selected month.")
@@ -561,7 +581,13 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
                 combined.to_excel(merged_path, index=False)
 
             log(f"[Drive] Processing {type_name} data ({len(combined)} rows) through the report engine...")
-            gen_res = Path(run_report([str(merged_path)], td, fancy_progress=False))
+            old_stdout = sys.stdout
+            sys.stdout = _StdoutToLog(log)
+            try:
+                gen_res = Path(run_report([str(merged_path)], td, fancy_progress=False))
+            finally:
+                sys.stdout.flush()
+                sys.stdout = old_stdout
             generated.append(gen_res)
 
         if not generated:
@@ -575,8 +601,13 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
             output = generated[0]
         else:
             log(f"[Drive] Consolidating {len(generated)} generated reports...")
-            output = Path(run_report(
-                [str(g) for g in generated], td, fancy_progress=False))
+            old_stdout = sys.stdout
+            sys.stdout = _StdoutToLog(log)
+            try:
+                output = Path(run_report([str(g) for g in generated], td, fancy_progress=False))
+            finally:
+                sys.stdout.flush()
+                sys.stdout = old_stdout
 
         final_name = MONTHLY_NAME.format(month=month, year=year) + ".xlsx"
         output = output.rename(output.with_name(final_name))
