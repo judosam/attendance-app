@@ -355,7 +355,13 @@ def normalize_shift(value):
 
     return s
 
+_HR_DATA_CACHE = {}
+_HR_USERS_CACHE = None
+
 def hr_api_call(min_date, max_date):
+    cache_key = (str(min_date), str(max_date))
+    if cache_key in _HR_DATA_CACHE:
+        return _HR_DATA_CACHE[cache_key]
     data = {'from_date': min_date, 'to_date': max_date}
     
     headers = {
@@ -364,12 +370,16 @@ def hr_api_call(min_date, max_date):
         "Content-Type": "application/x-www-form-urlencoded"
     }
 
-    response = requests.post('https://vservehr.com/attendance_api.php', data=data, headers=headers)
+    response = requests.post('https://vservehr.com/attendance_api.php', data=data, headers=headers, timeout=60)
     data = response.json()
-    data = data['data']
+    data = data.get('data', [])
+    _HR_DATA_CACHE[cache_key] = data
     return data
 
 def get_hr_user_ids():
+    global _HR_USERS_CACHE
+    if _HR_USERS_CACHE is not None:
+        return _HR_USERS_CACHE
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/126.0',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -381,10 +391,10 @@ def get_hr_user_ids():
         'auth_key': '96223d8b03964041d2adbebb89ef3f8e',
     }
     
-    response = requests.post('https://vservehr.com/api_user_list.php', headers=headers, data=data)
+    response = requests.post('https://vservehr.com/api_user_list.php', headers=headers, data=data, timeout=60)
     data = response.json()
-    # print(data)
-    data = data['data']
+    data = data.get('data', [])
+    _HR_USERS_CACHE = data
     return data
 
 def save_output_file(df, source_type, folder_path):
@@ -841,14 +851,26 @@ def process_timechamp_data(df):
     # print(df['Date'])
 
     df['Source'] = 'Timechamp'
-    df.rename(columns={'User': 'Employee Name'}, inplace=True)
+    if 'User' in df.columns and 'Employee Name' not in df.columns:
+        df.rename(columns={'User': 'Employee Name'}, inplace=True)
+    if 'Employee ID' in df.columns and 'Employee Id' not in df.columns:
+        df.rename(columns={'Employee ID': 'Employee Id'}, inplace=True)
+    if 'Team' in df.columns and 'Team Name' not in df.columns:
+        df.rename(columns={'Team': 'Team Name'}, inplace=True)
+    elif 'Department' in df.columns and 'Team Name' not in df.columns:
+        df.rename(columns={'Department': 'Team Name'}, inplace=True)
+
+    # Supply default column values if optional/time columns missing
+    for c in ['In Time', 'Out Time', 'Away Time', 'Idle Time', 'Break Time', 'Working Hours', 'Shift']:
+        if c not in df.columns:
+            df[c] = ''
 
     try:
         df = df[['Date', 'Employee Id', 'Employee Name', 'Team Name', 'Source', 'Shift', 'In Time', 'Out Time', 'Working Hours', 'Away Time', 'Idle Time', 'Break Time']]
     except Exception as e:
-        print(f"Error: Input file is not valid or Missing required columns: {str(e).replace(' not in index', '')}", flush=True)
-        os.system('pause')
-        sys.exit()
+        err_msg = f"Error: Input file is not valid or Missing required columns: {str(e).replace(' not in index', '')}"
+        print(err_msg, flush=True)
+        raise ValueError(err_msg)
     
     for column in ['Working Hours', 'Idle Time', 'Away Time', 'Break Time']:
         df[column] = df[column].apply(clean_time_string)
@@ -866,13 +888,15 @@ def process_timechamp_data(df):
     def get_actual_shift_time(shift):
         if pd.isna(shift):
             return pd.NaT
-        # print(shift)
-        start, end = shift.split(' - ')
-        start_time = datetime.strptime(start, '%H:%M IST')
-        end_time = datetime.strptime(end, '%H:%M IST')
-        actual_start = (start_time + timedelta(minutes=30)).strftime('%H:%M')
-        actual_end = (end_time - timedelta(minutes=30)).strftime('%H:%M')
-        return f"{actual_start} IST - {actual_end} IST"
+        try:
+            start, end = str(shift).split(' - ')
+            start_time = datetime.strptime(start.strip(), '%H:%M IST')
+            end_time = datetime.strptime(end.strip(), '%H:%M IST')
+            actual_start = (start_time + timedelta(minutes=30)).strftime('%H:%M')
+            actual_end = (end_time - timedelta(minutes=30)).strftime('%H:%M')
+            return f"{actual_start} IST - {actual_end} IST"
+        except Exception:
+            return str(shift) if pd.notna(shift) else pd.NaT
 
     df['Actual Shift Time'] = df['Shift'].apply(get_actual_shift_time)
     df['Late Login Status'] = df.apply(lambda row: calculate_late_login(row['Login Time'], row['Shift Start']), axis=1)
@@ -905,9 +929,9 @@ def process_manualtime_data(df):
     try:
         df = df[['Date', 'Employee ID', 'Employee Name', 'Team/Department', 'Source', 'Shift Timing', 'Login Time', 'Logout Time', 'Manual Hours', 'Break Hours']]
     except Exception as e:
-        print(f"Error: Input file is not valid or Missing required columns: {str(e).replace(' not in index', '')}", flush=True)
-        os.system('pause')
-        sys.exit()
+        err_msg = f"Error: Input file is not valid or Missing required columns: {str(e).replace(' not in index', '')}"
+        print(err_msg, flush=True)
+        raise ValueError(err_msg)
     
     df['Worked Hours'] = df['Manual Hours'].apply(clean_time_string)
     df['Break Hours'] = df['Break Hours'].apply(clean_time_string)
@@ -920,13 +944,15 @@ def process_manualtime_data(df):
     def get_actual_shift_time(shift):
         if pd.isna(shift):
             return pd.NaT
-        # print(shift)
-        start, end = shift.split(' - ')
-        start_time = datetime.strptime(start, '%H:%M IST')
-        end_time = datetime.strptime(end, '%H:%M IST')
-        actual_start = (start_time + timedelta(minutes=30)).strftime('%H:%M')
-        actual_end = (end_time - timedelta(minutes=30)).strftime('%H:%M')
-        return f"{actual_start} IST - {actual_end} IST"
+        try:
+            start, end = str(shift).split(' - ')
+            start_time = datetime.strptime(start.strip(), '%H:%M IST')
+            end_time = datetime.strptime(end.strip(), '%H:%M IST')
+            actual_start = (start_time + timedelta(minutes=30)).strftime('%H:%M')
+            actual_end = (end_time - timedelta(minutes=30)).strftime('%H:%M')
+            return f"{actual_start} IST - {actual_end} IST"
+        except Exception:
+            return str(shift) if pd.notna(shift) else pd.NaT
 
     df['Actual Shift Time'] = df['Shift Timing'].apply(get_actual_shift_time)
     df['Late Login Status'] = df.apply(lambda row: calculate_late_login(row['Login Time'], row['Shift Start']), axis=1)
@@ -938,27 +964,108 @@ def process_manualtime_data(df):
     df = final_adjustments(df)
     return df
 
-def file_consolidate(infiles):
-    print("Stage: consolidating generated reports", flush=True)
-    combined_df = pd.DataFrame()
-    for i, infile in enumerate(infiles, 1):
-        f_name = os.path.basename(infile)
-        print(f"Consolidating file {i}: {f_name}", flush=True)
-        if 'csv' in infile:
-            df = pd.read_csv(infile, sep=None, engine='python', encoding='utf-8', dtype=str)
-        elif 'xls' in infile:
-            df = pd.read_excel(infile, dtype=str)
-        combined_df = pd.concat([combined_df, df], ignore_index=True)
-    print()
-    # Deduplicate overlapping date records across multiple input files
+def load_and_process_file(infile):
+    """Load an input file and return (raw_df, detected_type).
+    
+    Returns:
+        df: unstyled pandas DataFrame with standardized report columns.
+        source_type: 'biometric', 'timechamp', 'manual', or 'report'
+    """
+    f_name = os.path.basename(infile)
+    if 'csv' in infile.lower() or infile.lower().endswith('.csv'):
+        with open(infile, 'rb') as f:
+            rawdata = f.read()
+        encoding_result = charset_normalizer.from_bytes(rawdata).best()
+        encoding = encoding_result.encoding if encoding_result else 'utf-8'
+        df = pd.read_csv(infile, sep=None, engine='python', encoding=encoding, dtype=str)
+    elif 'xls' in infile.lower() or infile.lower().endswith('.xlsx') or infile.lower().endswith('.xls'):
+        with pd.ExcelFile(infile) as excel_file:
+            if 'Detailed Report' in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name='Detailed Report', dtype=str)
+            else:
+                df = pd.read_excel(excel_file, dtype=str)
+    else:
+        raise ValueError(f"Unsupported file format: {f_name}")
+
+    # Clean up column names and whitespace
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+    for column in df.columns:
+        df[column] = df[column].replace(r'^\s+|\s+$', '', regex=True)
+
+    print(f"Loaded input file: {f_name} ({len(df)} rows)", flush=True)
+
+    # Process Biometric Raw Data
+    if 'Punch Records' in df.columns:
+        processed = process_biometric_data(df)
+        raw_df = processed.data if hasattr(processed, 'data') else processed
+        return raw_df.copy(), 'biometric'
+
+    # Process Timechamp Raw Data
+    lower_cols = [c.lower() for c in df.columns]
+    if "Expected Hours" in df.columns or "Working hours" in df.columns or (
+        'employeeid' in lower_cols and any(x in df.columns for x in ['Total Time', 'Working Hours', 'Break Time'])
+    ):
+        processed = process_timechamp_data(df)
+        raw_df = processed.data if hasattr(processed, 'data') else processed
+        return raw_df.copy(), 'timechamp'
+
+    # Process Manual Time Raw Data
+    if 'Manual Hours' in df.columns:
+        processed = process_manualtime_data(df)
+        raw_df = processed.data if hasattr(processed, 'data') else processed
+        return raw_df.copy(), 'manual'
+
+    # Already-generated report
+    if 'Attendance' in df.columns and any(c in df.columns for c in ['Worked Hours (Number)', 'Attendance Mismatch', 'Date']):
+        return df.copy(), 'report'
+
+    raise ValueError(
+        f"Unrecognised input format: '{f_name}' — "
+        "expected a Biometric CSV, Timechamp export, Manual-time file, or an already-generated report."
+    )
+
+
+def _dedup_and_sort_combined(combined_df):
+    """Deduplicate overlapping employee-date records across files and sort."""
     dedup_cols = [c for c in ['Employee ID', 'Date'] if c in combined_df.columns]
     if len(dedup_cols) == 2:
         temp_date = combined_df['Date'].apply(
             lambda x: str(pd.to_datetime(x, errors='coerce').date()) if pd.notna(pd.to_datetime(x, errors='coerce')) else str(x).strip()
         )
         combined_df['_temp_date'] = temp_date
+
+        def _row_prio(row):
+            att = str(row.get('Attendance') or '').strip().lower()
+            wh = row.get('Worked Hours (Number)')
+            try:
+                wh_num = float(wh) if pd.notna(wh) else 0.0
+            except (ValueError, TypeError):
+                wh_num = 0.0
+            score = 0
+            if att == 'full day' or wh_num >= 7.5:
+                score = 40
+            elif att == 'half day' or wh_num >= 3.5:
+                score = 30
+            elif wh_num > 0:
+                score = 20
+            elif att in ('present', 'comp off', 'paid holiday'):
+                score = 15
+            elif att in ('weekoff', 'absent'):
+                score = 5
+            else:
+                score = 1
+            score += min(wh_num, 24.0) / 100.0
+            return score
+
+        combined_df['_temp_prio'] = combined_df.apply(_row_prio, axis=1)
+        before_dedup = len(combined_df)
+        combined_df = combined_df.sort_values(by='_temp_prio', ascending=True)
         combined_df = combined_df.drop_duplicates(subset=['Employee ID', '_temp_date'], keep='last')
-        combined_df.drop(columns=['_temp_date'], inplace=True, errors='ignore')
+        dedup_removed = before_dedup - len(combined_df)
+        if dedup_removed > 0:
+            print(f"Deduplicated overlapping employee-date records: ignored {dedup_removed} duplicate(s).", flush=True)
+        combined_df.drop(columns=['_temp_date', '_temp_prio'], inplace=True, errors='ignore')
 
     sort_cols = [c for c in ['Employee ID', 'Employee Name', 'Date'] if c in combined_df.columns]
     if sort_cols:
@@ -966,82 +1073,92 @@ def file_consolidate(infiles):
     if 'SL No.' in combined_df.columns:
         combined_df.drop('SL No.', axis=1, inplace=True, errors='ignore')
     combined_df.insert(0, 'SL No.', range(1, len(combined_df) + 1))
-    
-    # Apply styling df
-    combined_df = combined_df.style.apply(break_highlight_status, axis=1)
-    if 'Attendance' in combined_df.columns:
-        combined_df = combined_df.map(Attendance_highlight_status, subset=['Attendance'])
-    if 'Date' in combined_df.columns:
-        combined_df = combined_df.map(Date_highlight_status, subset=['Date'])
     return combined_df
 
 
+def file_consolidate(infiles):
+    print("Stage: consolidating input files", flush=True)
+    processed_list = []
+    for infile in infiles:
+        df_item, _ = load_and_process_file(infile)
+        processed_list.append(df_item)
+    combined_df = pd.concat(processed_list, ignore_index=True)
+    combined_df = _dedup_and_sort_combined(combined_df)
+
+    # Apply styling df
+    styled_df = combined_df.style.apply(break_highlight_status, axis=1)
+    if 'Attendance' in combined_df.columns:
+        styled_df = styled_df.map(Attendance_highlight_status, subset=['Attendance'])
+    if 'Date' in combined_df.columns:
+        styled_df = styled_df.map(Date_highlight_status, subset=['Date'])
+    return styled_df
+
+
 def run_report(infiles, base_dir=None, fancy_progress=True):
-    """Run the attendance report pipeline - same logic and output as the original console script.
-    infiles: list of input file paths (one raw data file, or several already-generated reports to consolidate).
+    """Run the attendance report pipeline - single-pass processing & styling.
+    
+    infiles: list of input file paths (one or more raw data files, or several already-generated reports).
+             When both Biometric and Timechamp raw files are provided, both are processed in memory,
+             consolidated, and styled only once at the end.
     base_dir: where the Year/Month/<range> output folder is created (None = current working directory).
-    fancy_progress: use the rich console progress bar (True) or simple text progress lines (False).
+    fancy_progress: legacy argument (kept for compatibility).
     Returns the full path to the generated Excel report.
     """
-    # infile = r"timechamp dec 2025.xlsx"
-    # infile = r"Biometric dec 2025.xlsx"
-    # infile = r"Biometric Raw data _Jan_2026 2.xlsx"
-    # infile = r"Timechamp raw data _Jan 2026 2.xlsx"
+    if not infiles:
+        raise ValueError("No input files provided for report generation.")
 
     if len(infiles) == 1:
-        infile = infiles[0]
-        # Read the input file based on its type
-        if 'csv' in infile:
-            with open(infile, 'rb') as f:
-                rawdata = f.read()
-            encoding_result = charset_normalizer.from_bytes(rawdata).best()
-            encoding = encoding_result.encoding if encoding_result else 'utf-8'
-            df = pd.read_csv(infile, sep=None, engine='python', encoding=encoding, dtype=str)
-        elif 'xls' in infile:
-            df = pd.read_excel(infile)
-        print(f"Loaded input file: {os.path.basename(infile)} ({len(df)} rows)", flush=True)
-
-        # Clean up column names and data
-        df = df.rename(columns=lambda x: x.strip())
-        df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
-
-        for column in df.columns:
-            df[column] = df[column].replace(r'^\s+|\s+$', '', regex=True)
-
-        # Process Biometric Data
-        if 'Punch Records' in df.columns:
-            df = process_biometric_data(df)
+        raw_df, detected_type = load_and_process_file(infiles[0])
+        combined_df = raw_df
+        if detected_type == 'biometric':
             source_type = 'Biometric Attendance'
-        elif "Expected Hours" in df.columns:
-            df = process_timechamp_data(df)
+        elif detected_type == 'timechamp':
             source_type = 'Timechamp Attendance'
-        elif 'Manual Hours' in df.columns:
-            df = process_manualtime_data(df)
+        elif detected_type == 'manual':
             source_type = 'Manualtime Attendance'
         else:
-            raise ValueError(
-                f"Unrecognised input format: '{os.path.basename(infile)}' — "
-                "expected a Biometric CSV, Timechamp export, or Manual-time file."
-            )
+            source_type = 'Biometric and Timechamp Consolidated'
     else:
-        df = file_consolidate(infiles)
-        source_type = 'Biometric and Timechamp Consolidated'
+        print(f"Stage: loading and consolidating {len(infiles)} source data files in memory...", flush=True)
+        processed_list = []
+        types_found = set()
+        for infile in infiles:
+            raw_df, detected_type = load_and_process_file(infile)
+            processed_list.append(raw_df)
+            types_found.add(detected_type)
 
-    # Create pivot table and highlighted data
-    _rows = len(df.data) if hasattr(df, 'data') else len(df)
+        combined_df = pd.concat(processed_list, ignore_index=True)
+        combined_df = _dedup_and_sort_combined(combined_df)
+
+        if types_found == {'biometric'}:
+            source_type = 'Biometric Attendance'
+        elif types_found == {'timechamp'}:
+            source_type = 'Timechamp Attendance'
+        elif types_found == {'manual'}:
+            source_type = 'Manualtime Attendance'
+        else:
+            source_type = 'Biometric and Timechamp Consolidated'
+
+    # Apply styling df ONCE for the final workbook
+    styled_df = combined_df.style.apply(break_highlight_status, axis=1)
+    if 'Attendance' in combined_df.columns:
+        styled_df = styled_df.map(Attendance_highlight_status, subset=['Attendance'])
+    if 'Date' in combined_df.columns:
+        styled_df = styled_df.map(Date_highlight_status, subset=['Date'])
+
+    _rows = len(combined_df)
     print(f"Input processed: {source_type} ({_rows} rows)", flush=True)
     print("Building pivot table (Overall Summary)...", flush=True)
-    pivot_table = create_pivot_table(df)
+    pivot_table = create_pivot_table(styled_df)
     print("Building highlighted users sheet...", flush=True)
-    highlight_data = create_highlighted_data(df)
+    highlight_data = create_highlighted_data(styled_df)
     print("Writing styled Excel workbook (3 sheets)...", flush=True)
 
-    df_date = df.data.copy()
-    df_date['Date'] = pd.to_datetime(df_date['Date'], errors='coerce', format='mixed')
-    valid_d = df_date['Date'].dropna()
-    if len(valid_d) > 0:
-        min_date = valid_d.min()
-        max_date = valid_d.max()
+    df_date = combined_df.copy()
+    valid_dates = pd.to_datetime(df_date['Date'], errors='coerce', format='mixed').dropna()
+    if len(valid_dates) > 0:
+        min_date = valid_dates.min()
+        max_date = valid_dates.max()
     else:
         min_date = pd.Timestamp.now()
         max_date = pd.Timestamp.now()
@@ -1054,24 +1171,42 @@ def run_report(infiles, base_dir=None, fancy_progress=True):
     
     base = os.path.abspath(base_dir) if base_dir else os.getcwd()
     if min_date_str != max_date_str:
-        folder_path = os.path.join(base, year, month, f"{min_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}")
+        folder_path = os.path.join(base, year, month, f"{min_date_str} to {max_date_str}")
     else:
-        folder_path = os.path.join(base, year, month, min_date.strftime('%d-%b-%Y'))
+        folder_path = os.path.join(base, year, month, min_date_str)
     
     os.makedirs(folder_path, exist_ok=True)
 
     # Save to Excel
     file_name = save_output_file(df_date, source_type, folder_path)
-    # print(file_name)
 
     # Create ExcelWriter with openpyxl engine
     with pd.ExcelWriter(file_name, engine='openpyxl') as writer:
-        # Write DataFrames to their respective sheets
-        df.to_excel(writer, index=False, sheet_name='Detailed Report')
+        styled_df.to_excel(writer, index=False, sheet_name='Detailed Report')
         highlight_data.to_excel(writer, index=False, sheet_name='Highlighted Users')
         pivot_table.to_excel(writer, index=False, sheet_name='Overall Summary')
 
         workbook = writer.book
+        side = Side(border_style='dotted', color='000000')
+        border_style = Border(left=side, right=side, top=side, bottom=side)
+
+        header_font = Font(name='Verdana', size=9, bold=True)
+        header_fill = PatternFill(start_color='9bc2e6', end_color='9bc2e6', fill_type='solid')
+        header_align = Alignment(vertical='bottom', horizontal='left')
+
+        body_font = Font(name='Verdana', size=9, color='000000')
+        center_align = Alignment(vertical='center', horizontal='center')
+        left_align = Alignment(vertical='bottom', horizontal='left')
+
+        center_aligned_columns = {
+            'No of Worked Days', 'No of Attendance Mismatch', 'No of Worked Days (Attendance)',
+            'No of Break Hours more than 1 Hours', 'No of late login', 'No of Early Logout',
+            'Total HR Attendance Hours', 'No of Break Counts more than 4 Times (Biometric)',
+            'SL No.', 'Login Time', 'Logout Time', 'No of Breaks (Biometric)', 'Attendance',
+            'Day', 'Worked Hours (Number)', 'Break Hours (Number)', 'No of Worked below 4 hrs',
+            'No of Worked below 8 hrs', 'No of More Break Hours', 'Away Hours'
+        }
+
         for sheet_name in ['Detailed Report', 'Highlighted Users', 'Overall Summary']:
             worksheet = workbook[sheet_name]
 
@@ -1082,42 +1217,29 @@ def run_report(infiles, base_dir=None, fancy_progress=True):
                 worksheet.sheet_properties.tabColor = 'FFCCCC'  # Set tab color to light red
             elif sheet_name == 'Overall Summary':
                 worksheet.sheet_properties.tabColor = 'FFD700'  # Set tab color to gold
-            side = Side(border_style='dotted', color='000000')
-            border_style = Border(left=side, right=side, top=side, bottom=side)
 
-        
             # Apply styles to header
             for cell in worksheet[1]:
-                cell.font = Font(name='Verdana', size=9, bold=True)
-                cell.fill = PatternFill(start_color='9bc2e6', end_color='9bc2e6', fill_type='solid')
-                cell.alignment = Alignment(vertical='bottom', horizontal='left')
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_align
                 cell.border = border_style
-            
-            center_aligned_columns = ['No of Worked Days', 'No of Attendance Mismatch', 'No of Worked Days (Attendance)',
-                                'No of Break Hours more than 1 Hours', 'No of late login','No of Early Logout', 'Total HR Attendance Hours',
-                                'No of Break Counts more than 4 Times (Biometric)', 'SL No.', 'Login Time',
-                                'Logout Time','No of Breaks (Biometric)', 'Attendance', 'Day', 'Worked Hours (Number)',
-                                'Break Hours (Number)', 'No of Worked below 4 hrs', 'No of Worked below 8 hrs', 'No of More Break Hours','Away Hours']
 
-            center_aligned_indices = [worksheet.cell(row=1, column=i).column 
-                                  for i in range(1, worksheet.max_column + 1) 
-                                  if worksheet.cell(row=1, column=i).value in center_aligned_columns]
+            center_col_indices = {
+                cell.column for cell in worksheet[1] if cell.value in center_aligned_columns
+            }
 
-            for i, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column)):
+            for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
                 for cell in row:
-                    cell.font = Font(name='Verdana', size=9, color='000000')
+                    cell.font = body_font
                     cell.border = border_style
-                    if cell.column in center_aligned_indices:
-                        cell.alignment = Alignment(vertical='center', horizontal='center')
-                    else:
-                        cell.alignment = Alignment(vertical='bottom', horizontal='left')
+                    cell.alignment = center_align if cell.column in center_col_indices else left_align
             print(f"Styling {sheet_name}: done", flush=True)
+
     print(f"Report saved: {os.path.basename(file_name)}", flush=True)
     print(f"Saved Location: {file_name}", flush=True)
     print("Successfully Completed!", flush=True)
-    # messagebox.showinfo("Vserve Biometric Report", "Successfully Completed...")
     return file_name
-
 
 
 def main():

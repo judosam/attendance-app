@@ -21,6 +21,7 @@ Everything degrades to a clear FetchError the server can show in the log.
 import base64
 import json
 import re
+import time
 from datetime import date
 from pathlib import Path
 
@@ -222,13 +223,12 @@ def _input_value(html, field_id):
     return value_match.group(1) if value_match else None
 
 
-def fetch_biometric(target_dir, from_day, to_day, settings=None, log=None):
-    """Download the Daily Attendance Report CSV for the date range."""
-    log = log or (lambda message: None)
-    settings = settings or load_settings().get("biometric", {})
-    _clamp_range(from_day, to_day)
-    from_day, to_day = _future_guard(from_day, to_day)
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 5
 
+
+def _fetch_biometric_attempt(target_dir, from_day, to_day, settings, log):
+    """Single attempt to log in and download the Biometric CSV."""
     import warnings
     from urllib3.exceptions import InsecureRequestWarning
     warnings.simplefilter("ignore", InsecureRequestWarning)
@@ -303,6 +303,32 @@ def fetch_biometric(target_dir, from_day, to_day, settings=None, log=None):
     return path, f"Biometric portal CSV ({from_day.isoformat()} → {to_day.isoformat()})"
 
 
+def fetch_biometric(target_dir, from_day, to_day, settings=None, log=None):
+    """Download the Daily Attendance Report CSV for the date range (retries up to 3 times)."""
+    log = log or (lambda message: None)
+    settings = settings or load_settings().get("biometric", {})
+    _clamp_range(from_day, to_day)
+    from_day, to_day = _future_guard(from_day, to_day)
+
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            if attempt > 1:
+                log(f"[Biometric] Retry attempt {attempt}/{MAX_RETRIES}...")
+            return _fetch_biometric_attempt(target_dir, from_day, to_day, settings, log)
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_RETRIES:
+                log(f"[Biometric] Attempt {attempt}/{MAX_RETRIES} failed: {exc}. Retrying in {RETRY_DELAY_SECONDS}s...")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                log(f"[Biometric] All {MAX_RETRIES} attempts failed: {exc}")
+
+    if isinstance(last_error, FetchError):
+        raise last_error
+    raise FetchError(f"Biometric portal download failed after {MAX_RETRIES} attempts: {last_error}") from last_error
+
+
 # ---------------------------------------------------------------------------
 # TimeChamp cloud API
 # ---------------------------------------------------------------------------
@@ -343,13 +369,8 @@ def _timechamp_login(session, settings, log=None):
     return token
 
 
-def fetch_timechamp(target_dir, from_day, to_day, settings=None, log=None):
-    """Download the TimeChamp 'Working hours' attendance XLSX for the range."""
-    log = log or (lambda message: None)
-    settings = settings or load_settings().get("timechamp", {})
-    _clamp_range(from_day, to_day)
-    from_day, to_day = _future_guard(from_day, to_day)
-
+def _fetch_timechamp_attempt(target_dir, from_day, to_day, settings, log):
+    """Single attempt to log in and download the TimeChamp Working-hours XLSX."""
     target_dir = Path(target_dir)
     base = settings["base_url"].rstrip("/")
     session = requests.Session()
@@ -425,6 +446,32 @@ def fetch_timechamp(target_dir, from_day, to_day, settings=None, log=None):
         raise FetchError("TimeChamp report file looks empty for this date range.")
     log(f"Saved raw data: {path.name} ({path.stat().st_size:,} bytes)")
     return path, f"TimeChamp XLSX ({from_day.isoformat()} → {to_day.isoformat()})"
+
+
+def fetch_timechamp(target_dir, from_day, to_day, settings=None, log=None):
+    """Download the TimeChamp 'Working hours' attendance XLSX for the range (retries up to 3 times)."""
+    log = log or (lambda message: None)
+    settings = settings or load_settings().get("timechamp", {})
+    _clamp_range(from_day, to_day)
+    from_day, to_day = _future_guard(from_day, to_day)
+
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            if attempt > 1:
+                log(f"[TimeChamp] Retry attempt {attempt}/{MAX_RETRIES}...")
+            return _fetch_timechamp_attempt(target_dir, from_day, to_day, settings, log)
+        except Exception as exc:
+            last_error = exc
+            if attempt < MAX_RETRIES:
+                log(f"[TimeChamp] Attempt {attempt}/{MAX_RETRIES} failed: {exc}. Retrying in {RETRY_DELAY_SECONDS}s...")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                log(f"[TimeChamp] All {MAX_RETRIES} attempts failed: {exc}")
+
+    if isinstance(last_error, FetchError):
+        raise last_error
+    raise FetchError(f"TimeChamp export failed after {MAX_RETRIES} attempts: {last_error}") from last_error
 
 
 FETCHERS = {

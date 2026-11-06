@@ -492,7 +492,7 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
         log("[Drive] Raw types found: " + ", ".join(
             f"{k} ({len(v)})" for k, v in sorted(groups.items())))
 
-        generated = []
+        merged_raw_paths = []
         for type_name, paths in sorted(groups.items()):
             if cancel_event and cancel_event.is_set():
                 raise DriveError("Monthly compilation was cancelled by the user.")
@@ -569,7 +569,7 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
             if cancel_event and cancel_event.is_set():
                 raise DriveError("Monthly compilation was cancelled by the user.")
 
-            # Save clean merged file and run engine
+            # Save clean merged raw file
             if type_name == "biometric":
                 merged_path = raw_dir / f"biometric_month_{month:02d}_{year}.csv"
                 combined.to_csv(merged_path, index=False)
@@ -580,34 +580,27 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
                 merged_path = raw_dir / f"manual_month_{month:02d}_{year}.xlsx"
                 combined.to_excel(merged_path, index=False)
 
-            log(f"[Drive] Processing {type_name} data ({len(combined)} rows) through the report engine...")
-            old_stdout = sys.stdout
-            sys.stdout = _StdoutToLog(log)
-            try:
-                gen_res = Path(run_report([str(merged_path)], td, fancy_progress=False))
-            finally:
-                sys.stdout.flush()
-                sys.stdout = old_stdout
-            generated.append(gen_res)
+            merged_raw_paths.append(str(merged_path))
+            log(f"[Drive] Cleaned and merged {type_name} raw data: {len(combined)} records.")
 
-        if not generated:
+        if not merged_raw_paths:
             raise DriveError(f"No valid raw records found for {month_label} to compile.")
 
         if cancel_event and cancel_event.is_set():
             raise DriveError("Monthly compilation was cancelled by the user.")
 
-        # ---- Consolidate generated reports into the monthly workbook ----
-        if len(generated) == 1:
-            output = generated[0]
+        # ---- Single-pass engine consolidation & styling -----------------
+        if len(merged_raw_paths) == 1:
+            log(f"[Drive] Processing raw data through report engine...")
         else:
-            log(f"[Drive] Consolidating {len(generated)} generated reports...")
-            old_stdout = sys.stdout
-            sys.stdout = _StdoutToLog(log)
-            try:
-                output = Path(run_report([str(g) for g in generated], td, fancy_progress=False))
-            finally:
-                sys.stdout.flush()
-                sys.stdout = old_stdout
+            log(f"[Drive] Consolidating {len(merged_raw_paths)} raw data source(s) and styling through report engine...")
+        old_stdout = sys.stdout
+        sys.stdout = _StdoutToLog(log)
+        try:
+            output = Path(run_report(merged_raw_paths, td, fancy_progress=False))
+        finally:
+            sys.stdout.flush()
+            sys.stdout = old_stdout
 
         final_name = MONTHLY_NAME.format(month=month, year=year) + ".xlsx"
         output = output.rename(output.with_name(final_name))
@@ -708,15 +701,26 @@ def _list_files(service, folder_id):
 
 def _download_file(service, file_id, target: Path):
     import io
+    import time
     from googleapiclient.http import MediaIoBaseDownload
 
-    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _status, done = downloader.next_chunk(num_retries=2)
-    target.write_bytes(fh.getvalue())
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _status, done = downloader.next_chunk(num_retries=2)
+            target.write_bytes(fh.getvalue())
+            return
+        except Exception as exc:
+            last_err = exc
+            if attempt < 3:
+                time.sleep(3)
+    if last_err:
+        raise last_err
 
 
 # ---------------------------------------------------------------------------

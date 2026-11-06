@@ -420,12 +420,14 @@ def header_columns(path):
 def validate_inputs(paths):
     """Mirror the engine's input expectations so users get clear messages.
 
-    Returns (ok, message). Single file -> one raw-data flavour must be
-    detected (same markers as the engine). Multiple files -> each must be an
-    already-generated report (the engine's consolidate branch).
+    Returns (ok, message). Can accept:
+    - One or more supported raw data files (Biometric, Timechamp, or Manual)
+    - One or more already-generated reports
     """
-    if len(paths) == 1:
-        path = paths[0]
+    if not paths:
+        return False, "No input files provided."
+
+    for path in paths:
         try:
             columns = header_columns(path)
         except ValueError as exc:
@@ -433,10 +435,10 @@ def validate_inputs(paths):
         name = Path(path).name
 
         if BIOMETRIC_MARK in columns:
-            return True, ""
-        if TIMECHAMP_MARK in columns:
+            continue
+        if TIMECHAMP_MARK in columns or (any(alt in columns for alt in TIMECHAMP_NAME_ALTS) and any(x in columns for x in ['Total Time', 'Working Hours', 'Break Time'])):
             missing = [col for col in TIMECHAMP_REQUIRED if col not in columns]
-            if missing:
+            if missing and TIMECHAMP_MARK not in columns:
                 return False, (
                     f"“{name}” looks like Timechamp data but is missing columns: "
                     f"{', '.join(missing)}. Export the full Timechamp report and try again."
@@ -446,7 +448,7 @@ def validate_inputs(paths):
                     f"“{name}” looks like Timechamp data but has no “Employee Name” "
                     "or “User” column. Export the full Timechamp report and try again."
                 )
-            return True, ""
+            continue
         if MANUAL_MARK in columns:
             missing = [col for col in MANUAL_REQUIRED if col not in columns]
             if missing:
@@ -454,27 +456,17 @@ def validate_inputs(paths):
                     f"“{name}” looks like manual-tracking data but is missing columns: "
                     f"{', '.join(missing)}. Export the full manual-tracking report and try again."
                 )
-            return True, ""
+            continue
+        # Check if already-generated report
+        missing_rep = [col for col in CONSOLIDATE_REQUIRED if col not in columns]
+        if not missing_rep:
+            continue
         return False, (
-            f"“{name}” does not look like supported raw data. Expected one file with a "
-            f"“{BIOMETRIC_MARK}”, “{TIMECHAMP_MARK}”, or “{MANUAL_MARK}” column, or several "
-            "already-generated report files to consolidate."
+            f"“{name}” does not look like supported attendance data. Expected a file with a "
+            f"“{BIOMETRIC_MARK}”, “{TIMECHAMP_MARK}”, or “{MANUAL_MARK}” column, or an "
+            "already-generated report file."
         )
 
-    # Multiple files -> consolidate previously generated reports.
-    for path in paths:
-        try:
-            columns = header_columns(path)
-        except ValueError as exc:
-            return False, str(exc)
-        name = Path(path).name
-        missing = [col for col in CONSOLIDATE_REQUIRED if col not in columns]
-        if missing:
-            return False, (
-                f"“{name}” is missing report columns needed for consolidation: "
-                f"{', '.join(missing)}. Add already-generated Detailed Reports "
-                "(from earlier runs), not raw data files."
-            )
     return True, ""
 
 
@@ -1035,33 +1027,15 @@ def _fetched_job_worker(job_id, sources, from_day, to_day, schedule_name=None,
             saved.append(str(path))
         log(f"Raw data ready: {len(saved)} file(s) validated against the engine.")
 
-        # ---- Phase 2: engine per raw file ---------------------------------
-        generated = []
-        if len(saved) == 1:
-            if is_job_cancelled(job_id):
-                raise ValueError("Generation was cancelled by the user.")
-            log("Processing raw data through the report engine...")
-            output = _run_engine_sync(job_id, saved, log)
-            generated.append(output)
-        else:
-            for raw in saved:
-                if is_job_cancelled(job_id):
-                    raise ValueError("Generation was cancelled by the user.")
-                label = ("Biometric" if "biometric" in Path(raw).name
-                         else "Timechamp")
-                log(f"Processing {label} raw data through the report engine...")
-                output = _run_engine_sync(job_id, [raw], log)
-                generated.append(output)
-                log(f"{label} report generated: {Path(output).name}")
-
-        # ---- Phase 3: consolidate into the final report -------------------
+        # ---- Phase 2: single-pass engine processing & consolidation -------
         if is_job_cancelled(job_id):
             raise ValueError("Generation was cancelled by the user.")
-        final_output = generated[0]
-        if len(generated) > 1:
-            log("Consolidating generated reports into the final combined report...")
-            final_output = _run_engine_sync(job_id, generated, log)
-            log(f"Final consolidated report: {Path(final_output).name}")
+        if len(saved) == 1:
+            log("Processing raw data through the report engine...")
+        else:
+            log(f"Consolidating {len(saved)} sources and processing through the report engine...")
+        final_output = _run_engine_sync(job_id, saved, log)
+        log(f"Report generated: {Path(final_output).name}")
 
         if is_job_cancelled(job_id):
             raise ValueError("Generation was cancelled by the user.")
