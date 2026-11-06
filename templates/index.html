@@ -833,7 +833,10 @@
   <!-- Monthly compilation dialog -->
   <div id="monthlyDialog" class="modal-backdrop" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="monthlyTitle">
-      <h2 id="monthlyTitle">Compile monthly report</h2>
+      <div class="modal-header-row">
+        <h2 id="monthlyTitle">Compile monthly report</h2>
+        <button type="button" id="monthlyCloseX" class="modal-close-btn" aria-label="Close dialog">&times;</button>
+      </div>
       <p class="muted" style="font-size:13px;">Downloads the month's raw data from Google Drive, runs the
         report engine on it, and uploads one “Monthly Attendance Compilation” workbook back to Drive.</p>
       <form id="monthlyForm" novalidate>

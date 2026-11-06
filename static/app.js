@@ -3039,6 +3039,7 @@
   /* ---------------- monthly compilation (from Drive dailies) ---------------- */
   const monthly = {
     dialog: $("monthlyDialog"),
+    closeX: $("monthlyCloseX"),
     form: $("monthlyForm"),
     cancel: $("monthlyCancel"),
     go: $("monthlyGo"),
@@ -3076,6 +3077,12 @@
   function stopMonthlyPoll() {
     if (monthly.pollTimer) window.clearInterval(monthly.pollTimer);
     monthly.pollTimer = null;
+  }
+
+  if (monthly.closeX) {
+    monthly.closeX.addEventListener("click", () => {
+      monthly.cancel.click();
+    });
   }
 
   monthly.cancel.addEventListener("click", async () => {

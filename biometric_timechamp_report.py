@@ -1045,51 +1045,22 @@ def load_and_process_file(infile):
 
 
 def _dedup_and_sort_combined(combined_df):
-    """Deduplicate overlapping employee-date records across files and sort."""
-    dedup_cols = [c for c in ['Employee ID', 'Date'] if c in combined_df.columns]
-    if len(dedup_cols) == 2:
-        temp_date = combined_df['Date'].apply(
-            lambda x: str(pd.to_datetime(x, errors='coerce').date()) if pd.notna(pd.to_datetime(x, errors='coerce')) else str(x).strip()
-        )
-        combined_df['_temp_date'] = temp_date
+    """Deduplicate overlapping records across files comparing full row and sort."""
+    if 'SL No.' in combined_df.columns:
+        combined_df = combined_df.drop('SL No.', axis=1)
 
-        def _row_prio(row):
-            att = str(row.get('Attendance') or '').strip().lower()
-            wh = row.get('Worked Hours (Number)')
-            try:
-                wh_num = float(wh) if pd.notna(wh) else 0.0
-            except (ValueError, TypeError):
-                wh_num = 0.0
-            score = 0
-            if att == 'full day' or wh_num >= 7.5:
-                score = 40
-            elif att == 'half day' or wh_num >= 3.5:
-                score = 30
-            elif wh_num > 0:
-                score = 20
-            elif att in ('present', 'comp off', 'paid holiday'):
-                score = 15
-            elif att in ('weekoff', 'absent'):
-                score = 5
-            else:
-                score = 1
-            score += min(wh_num, 24.0) / 100.0
-            return score
+    for sc in combined_df.select_dtypes(include=['object', 'string']).columns:
+        combined_df[sc] = combined_df[sc].apply(lambda v: v.strip() if isinstance(v, str) else v)
 
-        combined_df['_temp_prio'] = combined_df.apply(_row_prio, axis=1)
-        before_dedup = len(combined_df)
-        combined_df = combined_df.sort_values(by='_temp_prio', ascending=True)
-        combined_df = combined_df.drop_duplicates(subset=['Employee ID', '_temp_date'], keep='last')
-        dedup_removed = before_dedup - len(combined_df)
-        if dedup_removed > 0:
-            print(f"Deduplicated overlapping employee-date records: ignored {dedup_removed} duplicate(s).", flush=True)
-        combined_df.drop(columns=['_temp_date', '_temp_prio'], inplace=True, errors='ignore')
+    before_dedup = len(combined_df)
+    combined_df = combined_df.drop_duplicates(keep='first')
+    dedup_removed = before_dedup - len(combined_df)
+    if dedup_removed > 0:
+        print(f"Ignored {dedup_removed} duplicate row(s) (full row match).", flush=True)
 
     sort_cols = [c for c in ['Employee ID', 'Employee Name', 'Date'] if c in combined_df.columns]
     if sort_cols:
         combined_df = combined_df.sort_values(by=sort_cols)
-    if 'SL No.' in combined_df.columns:
-        combined_df.drop('SL No.', axis=1, inplace=True, errors='ignore')
     combined_df.insert(0, 'SL No.', range(1, len(combined_df) + 1))
     return combined_df
 
@@ -1262,7 +1233,7 @@ def run_report(infiles, base_dir=None, fancy_progress=True):
 
 def main():
     """Original console entry point - behaviour unchanged from the pre-UI script."""
-    infiles = [r"G:\My Drive\Attendance Workbench Raw Data\2026\september\rawdata\biometric_daily_2026-09-16_2026-09-16.csv"]
+    infiles = [r"G:\My Drive\Attendance Workbench Raw and Report Files\2026\october\rawdata\timechamp_attendance_2026-10-01_2026-10-31.xlsx", r"G:\My Drive\Attendance Workbench Raw and Report Files\2026\october\rawdata\biometric_daily_2026-10-01_2026-10-31.csv"]
     run_report(infiles)
     # os.system('pause')
 

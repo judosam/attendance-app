@@ -532,39 +532,36 @@ def compile_monthly(year: int, month: int, log=None, dest_dir=None, cancel_event
                 log(f"[Drive] Note: No records found for {type_name} in {month_label}.")
                 continue
 
-            # 2. Ignore duplicate data across multiple date files
-            emp_col = next(
-                (c for c in ['Employee Code', 'Employee ID', 'Employee Id', 'User', 'Employee Name']
-                 if c in combined.columns),
-                None
-            )
-            if date_col and emp_col:
-                # Standardize Date column values to YYYY-MM-DD for accurate deduplication
+            # 2. Ignore duplicate data across multiple date files (compare with full row)
+            if date_col:
+                # Standardize Date column values to YYYY-MM-DD for accurate comparison
                 parsed_clean = pd.to_datetime(
                     combined[date_col].astype(str).str.strip(), errors='coerce', format='mixed'
                 )
                 valid_mask = parsed_clean.notna()
                 combined.loc[valid_mask, date_col] = parsed_clean[valid_mask].dt.strftime('%Y-%m-%d')
-                combined[emp_col] = combined[emp_col].astype(str).str.strip()
 
-                # Prioritize rows with actual punches or working hours
-                if 'Punch Records' in combined.columns:
-                    combined['__p_score'] = combined['Punch Records'].astype(str).str.strip().str.len()
-                    combined = combined.sort_values(by='__p_score', ascending=True).drop(columns=['__p_score'])
-                elif 'Working Hours' in combined.columns:
-                    combined['__h_score'] = combined['Working Hours'].astype(str).str.strip().str.len()
-                    combined = combined.sort_values(by='__h_score', ascending=True).drop(columns=['__h_score'])
+            for sc in combined.select_dtypes(include=['object', 'string']).columns:
+                combined[sc] = combined[sc].apply(lambda v: v.strip() if isinstance(v, str) else v)
 
-                before_dedup = len(combined)
-                combined = combined.drop_duplicates(subset=[date_col, emp_col], keep='last')
-                dedup_removed = before_dedup - len(combined)
-                if dedup_removed > 0:
-                    log(f"[Drive] Ignored {dedup_removed} duplicate employee-date record(s) across overlapping files.")
-            else:
-                before_dedup = len(combined)
-                combined = combined.drop_duplicates()
-                if len(combined) < before_dedup:
-                    log(f"[Drive] Ignored {before_dedup - len(combined)} identical duplicate row(s).")
+            # Drop temporary serial number if present before comparing full row
+            has_sl = False
+            sl_col_name = None
+            for sl in ['SL No.', 'Sl No', 'S.No', 'Sl. No.']:
+                if sl in combined.columns:
+                    has_sl = True
+                    sl_col_name = sl
+                    combined = combined.drop(columns=[sl])
+                    break
+
+            before_dedup = len(combined)
+            combined = combined.drop_duplicates(keep='first')
+            dedup_removed = before_dedup - len(combined)
+            if dedup_removed > 0:
+                log(f"[Drive] Ignored {dedup_removed} duplicate row(s) (full row match).")
+
+            if has_sl and sl_col_name:
+                combined.insert(0, sl_col_name, range(1, len(combined) + 1))
 
             if cancel_event and cancel_event.is_set():
                 raise DriveError("Monthly compilation was cancelled by the user.")

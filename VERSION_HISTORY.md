@@ -1,5 +1,22 @@
 # Version History
 
+## [v2.3.1] — 2026-11-06
+
+### Type
+Deduplication Logic Enhancement & Modal Dialog Responsiveness Hotfix / Production Deployment
+
+### Changed & Fixed
+- **Full-Row Duplicate Comparison**:
+  - Updated raw file deduplication across multiple/overlapping date files in gdrive.py and consolidated processing in iometric_timechamp_report.py to compare full rows (drop_duplicates(keep='first')).
+  - Previously, deduplication was performed by subsetting ['Employee ID', 'Date'], which erroneously discarded non-identical rows sharing the same employee and date (e.g. split shifts, multi-punch entries, and distinct tasks).
+  - Automatically strips string/object columns for consistent comparisons and safely excludes autoincrement SL No. columns before comparison, cleanly re-numbering serial numbers 1..N upon completion.
+- **Compile Monthly Report Modal Viewport Layout**:
+  - Resolved viewport clipping and inaccessible modal header/footer on laptop displays and scaled browser viewports.
+  - Replaced .modal-backdrop flex centering with lign-items: flex-start combined with margin: auto on .modal, preventing negative scroll space clipping.
+  - Added a dedicated modal close button (&times;) in the dialog header.
+  - Set position: sticky; bottom: 0; on .modal-actions to ensure the Cancel and Compile buttons are always visible on screen.
+  - Added adaptive height constraints (min-height: 90px; max-height: min(28vh, 210px);) with internal scrolling on the compilation log panel.
+
 ## [v2.3.0] — 2026-11-06
 
 ### Type
