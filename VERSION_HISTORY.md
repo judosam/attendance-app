@@ -19,6 +19,11 @@ Performance Optimization & Download Resilience Release / Production Deployment
   - Added 3x retry logic with 3-second backoff to Google Drive raw file downloads in `gdrive.py` (`_download_file`).
 
 ### Fixed
+- **Sunday & Zero-Punch Report Generation Fix**:
+  - Fixed `IndexError: single positional indexer is out-of-bounds` in `process_biometric_data` when generating reports on Sundays or dates where employees have no punch events.
+  - Guarded `First_IN` and `Last_OUT` extraction so `df.filter(like='IN')` safely falls back to `pd.NaT` instead of indexing an empty column slice.
+  - Handled empty HR API responses (`data = []`) in `final_adjustments` without throwing `KeyError: 'Employee ID'`.
+  - Fixed `TypeError: boolean value of NA is ambiguous` in `create_pivot_table` by adding `pd.notna(x)` guards before checking status strings.
 - **Graceful Error Handling & File Resource Cleanup**:
   - Replaced legacy `os.system('pause')` and `sys.exit()` in `process_timechamp_data` and `process_manualtime_data` with standard `ValueError` exceptions, preventing worker process hangs.
   - Wrapped `pd.ExcelFile` with context managers to guarantee immediate file handle release on Windows and prevent `PermissionError` on temporary files.

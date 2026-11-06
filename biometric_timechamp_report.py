@@ -510,36 +510,43 @@ def final_adjustments(df):
         data = hr_api_call(min_date, max_date)
     except Exception as e:
         raise ValueError(f"Error occurred while calling HR API: {e}")
-        # data = []
 
     hr_user_ids = get_hr_user_ids()
-    hr_user_ids =  pd.DataFrame(hr_user_ids)
-    hr_user_ids.rename(columns={'emp_id': 'Employee ID', 'designation': 'Designation'}, inplace=True)
-    # hr_user_ids.to_excel('debug_hr_user_ids.xlsx', index=False)
+    hr_user_ids = pd.DataFrame(hr_user_ids)
+    if 'emp_id' in hr_user_ids.columns:
+        hr_user_ids.rename(columns={'emp_id': 'Employee ID', 'designation': 'Designation'}, inplace=True)
+    else:
+        hr_user_ids = pd.DataFrame(columns=['Employee ID', 'Designation', 'user_name', 'team_name'])
 
-    hr_df = pd.DataFrame(data).astype(str)  
-    # print(hr_user_ids)
+    if not data:
+        hr_df = pd.DataFrame(columns=['Date', 'Employee ID', 'HR Attendance'])
+    else:
+        hr_df = pd.DataFrame(data).astype(str)
+        rename_col = {
+            'emp_id': 'Employee ID',
+            'date': 'Date',
+            'attendance': 'HR Attendance',
+        }
+        hr_df.rename(columns=rename_col, inplace=True)
+        for col in ['Date', 'Employee ID', 'HR Attendance']:
+            if col not in hr_df.columns:
+                hr_df[col] = ''
 
-    rename_col = {
-        'emp_id': 'Employee ID',
-        'date': 'Date',
-        'attendance': 'HR Attendance',
-    }
-
-    hr_df.rename(columns=rename_col, inplace=True)
     df['Employee ID'] = df['Employee ID'].astype(str).str.strip()
     hr_df['Employee ID'] = hr_df['Employee ID'].astype(str).str.strip()
 
     df['Date'] = pd.to_datetime(df['Date']).dt.date.astype(str)
-    df["Employee ID"] = df["Employee ID"].astype(str).str.replace(r"^(10)(\d{2})00$", r"IN\1\2", regex=True)
+    df["Employee ID"] = df["Employee ID"].astype(str).str.replace(r"^(10)(\d{2})00$", r"IN", regex=True)
     hr_df['Date'] = pd.to_datetime(hr_df['Date']).dt.date.astype(str)
 
     df = pd.merge(df, hr_df[['Date', 'Employee ID', 'HR Attendance']], how='left', on=['Employee ID', 'Date'])
     df = pd.merge(hr_user_ids, df, how='left', on='Employee ID')
     df = df[df["Date"].notna()]
 
-    df['Employee Name'] = df['user_name']
-    df['Team/Department'] = df['team_name']
+    if 'user_name' in df.columns:
+        df['Employee Name'] = df['user_name'].fillna(df.get('Employee Name', ''))
+    if 'team_name' in df.columns:
+        df['Team/Department'] = df['team_name'].fillna(df.get('Team/Department', ''))
 
     # df.to_excel('debug_merged.xlsx', index=False)
 
@@ -617,10 +624,10 @@ def create_pivot_table(df):
 
     pivot_table['No of Worked Days'] = pivot_table['Attendance'].map(attendance_mapping)
 
-    pivot_table['No of Worked below 8 hrs'] = pivot_table['Worked Hours Status'].apply(lambda x: 1 if x == 'Worked below 8 hrs' else 0)
-    pivot_table['No of Worked below 4 hrs'] = pivot_table['Worked Hours Status'].apply(lambda x: 1 if x == 'Worked below 4 hrs' else 0)
-    pivot_table['No of More Break Hours'] = pivot_table['Break Hours Status'].apply(lambda x: 1 if isinstance(x, str) else 0)
-    pivot_table['No of Attendance Mismatch'] = pivot_table['Attendance Mismatch'].apply(lambda x: 1 if isinstance(x, str) else 0)
+    pivot_table['No of Worked below 8 hrs'] = pivot_table['Worked Hours Status'].apply(lambda x: 1 if pd.notna(x) and x == 'Worked below 8 hrs' else 0)
+    pivot_table['No of Worked below 4 hrs'] = pivot_table['Worked Hours Status'].apply(lambda x: 1 if pd.notna(x) and x == 'Worked below 4 hrs' else 0)
+    pivot_table['No of More Break Hours'] = pivot_table['Break Hours Status'].apply(lambda x: 1 if pd.notna(x) and isinstance(x, str) else 0)
+    pivot_table['No of Attendance Mismatch'] = pivot_table['Attendance Mismatch'].apply(lambda x: 1 if pd.notna(x) and isinstance(x, str) else 0)
 
     half_leaves = [
         'Sick Leave - Half', 'EL HD', 'Leave - Half Day',
@@ -690,138 +697,146 @@ def create_highlighted_data(df):
     highlight_data = df.data.copy()
     highlight_data = highlight_data.replace({'Early Login': pd.NaT, 'No Delay': pd.NaT, 'No Early Logout': pd.NaT})
     highlight_data = highlight_data.dropna(subset=['Late Login Status', 'Early Logout Status', 'Worked Hours Status', 'Break Hours Status', 'No of Break Counts more than 4 Times (Biometric)','Attendance Mismatch'], how='all')
-    highlight_data = highlight_data.drop('SL No.', axis=1)
+    if 'SL No.' in highlight_data.columns:
+        highlight_data = highlight_data.drop('SL No.', axis=1)
     highlight_data.insert(0, 'SL No.', range(1, len(highlight_data) + 1))
     
     highlight_data = highlight_data.style.apply(break_highlight_status, axis=1)
-    highlight_data = highlight_data.map(Attendance_highlight_status, subset=['Attendance'])
-    highlight_data = highlight_data.map(Date_highlight_status, subset=['Date'])
+    if 'Attendance' in highlight_data.columns:
+        highlight_data = highlight_data.map(Attendance_highlight_status, subset=['Attendance'])
+    if 'Date' in highlight_data.columns:
+        highlight_data = highlight_data.map(Date_highlight_status, subset=['Date'])
     return highlight_data
+
 
 def process_biometric_data(df):
     print("Stage: processing biometric attendance data", flush=True)
-    # print(df['Date'])
     df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', dayfirst=True).dt.strftime('%Y-%m-%d')
     df['Shift'] = df['Shift'].apply(normalize_shift)
     
     df = df.reset_index()
     maindf = df.copy()
     
-    # Process punch records
-    df = df[df['Punch Records'].notnull()]
-    in_out_df = df['Punch Records'].apply(extract_in_out_events)
-    final_df = pd.concat([df, in_out_df], axis=1)
+    # Process punch records safely
+    valid_punch_mask = df['Punch Records'].notnull() & (df['Punch Records'].astype(str).str.strip().ne(''))
+    punch_df = df[valid_punch_mask].copy()
 
-    # Sort and interleave IN and OUT columns
-    in_columns = [col for col in final_df.columns if col.startswith('IN')]
-    out_columns = [col for col in final_df.columns if col.startswith('OUT')]
+    if len(punch_df) > 0:
+        in_out_df = punch_df['Punch Records'].apply(extract_in_out_events)
+        in_columns = [col for col in in_out_df.columns if col.startswith('IN')]
+        out_columns = [col for col in in_out_df.columns if col.startswith('OUT')]
 
-    in_columns_sorted = sorted(in_columns, key=lambda x: int(x[2:]))
-    out_columns_sorted = sorted(out_columns, key=lambda x: int(x[3:]))
+        in_columns_sorted = sorted(in_columns, key=lambda x: int(x[2:])) if in_columns else []
+        out_columns_sorted = sorted(out_columns, key=lambda x: int(x[3:])) if out_columns else []
 
-    interleaved_columns = [col for pair in zip(in_columns_sorted, out_columns_sorted) for col in pair]
+        interleaved_columns = [col for pair in zip(in_columns_sorted, out_columns_sorted) for col in pair]
+        if len(in_columns_sorted) > len(out_columns_sorted):
+            interleaved_columns += in_columns_sorted[len(out_columns_sorted):]
+        elif len(out_columns_sorted) > len(in_columns_sorted):
+            interleaved_columns += out_columns_sorted[len(in_columns_sorted):]
 
-    if len(in_columns_sorted) > len(out_columns_sorted):
-        interleaved_columns += in_columns_sorted[len(out_columns_sorted):]
-    elif len(out_columns_sorted) > len(in_columns_sorted):
-        interleaved_columns += out_columns_sorted[len(in_columns_sorted):]
+        final_df = pd.concat([punch_df, in_out_df], axis=1)
+        sub_df = final_df[['index', 'Date', 'Shift'] + interleaved_columns]
 
-    df = final_df[['index', 'Date', 'Shift'] + interleaved_columns]
+        # Adjust timestamps
+        time_columns = [col for col in sub_df.columns if "IN" in col or "OUT" in col]
+        for idx, row in sub_df.iterrows():
+            date_str = row['Date']
+            for col in time_columns:
+                sub_df.at[idx, col] = adjust_timestamp(row[col], date_str)
 
-    # Adjust timestamps
-    time_columns = [col for col in df.columns if "IN" in col or "OUT" in col]
-    for idx, row in df.iterrows():
-        date_str = row['Date']
-        for col in time_columns:
-            df.at[idx, col] = adjust_timestamp(row[col], date_str)
+        # Calculate First IN and Last OUT safely
+        if in_columns_sorted:
+            sub_df['First_IN'] = sub_df[in_columns_sorted[0]]
+        else:
+            sub_df['First_IN'] = pd.NaT
 
-    # Calculate First IN and Last OUT
-    df['First_IN'] = df.filter(like='IN').iloc[:, 0]
-    out_columns = df.filter(like='OUT')
-    reversed_out_columns = out_columns.iloc[:, ::-1]
-    df['Last_OUT'] = reversed_out_columns.apply(find_last_non_nan, axis=1)
+        if out_columns_sorted:
+            reversed_out_columns = sub_df[out_columns_sorted].iloc[:, ::-1]
+            sub_df['Last_OUT'] = reversed_out_columns.apply(find_last_non_nan, axis=1)
+        else:
+            sub_df['Last_OUT'] = pd.NaT
 
-    # Count IN and OUT times
-    df[["IN_Time Count", "OUT_Time Count"]] = df.apply(count_in_out, axis=1).tolist()
+        # Count IN and OUT times
+        if in_columns or out_columns:
+            sub_df[["IN_Time Count", "OUT_Time Count"]] = sub_df.apply(count_in_out, axis=1).tolist()
+        else:
+            sub_df["IN_Time Count"] = 0
+            sub_df["OUT_Time Count"] = 0
 
-    df.columns = df.columns.str.strip()
+        sub_df.columns = sub_df.columns.str.strip()
 
-    # Calculate work and break hours
-    for i in range(1, 30):
-        out_col = f'OUT {i}'
-        in_col = f'IN {i+1}'
-        out_col1 = f'OUT {i}'
-        in_col1 = f'IN {i}'
-        if out_col1 in df.columns:
-            df[f'Work_{i}'] = (pd.to_datetime(df[out_col1], format='%Y-%m-%d %H:%M') - pd.to_datetime(df[in_col1], format='%Y-%m-%d %H:%M')).dt.total_seconds() // 60
-        if in_col in df.columns:
-            df[f'Break_{i}'] = (pd.to_datetime(df[in_col], format='%Y-%m-%d %H:%M') - pd.to_datetime(df[out_col], format='%Y-%m-%d %H:%M')).dt.total_seconds() // 60
+        # Calculate work and break hours
+        for i in range(1, 30):
+            out_col1 = f'OUT {i}'
+            in_col1 = f'IN {i}'
+            out_col = f'OUT {i}'
+            in_col = f'IN {i+1}'
+            if out_col1 in sub_df.columns and in_col1 in sub_df.columns:
+                sub_df[f'Work_{i}'] = (pd.to_datetime(sub_df[out_col1], format='%Y-%m-%d %H:%M', errors='coerce') - pd.to_datetime(sub_df[in_col1], format='%Y-%m-%d %H:%M', errors='coerce')).dt.total_seconds() // 60
+            if in_col in sub_df.columns and out_col in sub_df.columns:
+                sub_df[f'Break_{i}'] = (pd.to_datetime(sub_df[in_col], format='%Y-%m-%d %H:%M', errors='coerce') - pd.to_datetime(sub_df[out_col], format='%Y-%m-%d %H:%M', errors='coerce')).dt.total_seconds() // 60
 
-    break_columns = [col for col in df.columns if "Break_" in col]
-    work_columns = [col for col in df.columns if "Work_" in col]
+        break_columns = [col for col in sub_df.columns if "Break_" in col]
+        work_columns = [col for col in sub_df.columns if "Work_" in col]
 
-    df['Worked Hours'] = df[work_columns].sum(axis=1)
-    df['Break Hours'] = df[break_columns].sum(axis=1)
-    df['Worked Hours'] = pd.to_timedelta(df['Worked Hours'], unit='m')
-    df['Break Hours'] = pd.to_timedelta(df['Break Hours'], unit='m')
+        if work_columns:
+            sub_df['Worked Hours'] = pd.to_timedelta(sub_df[work_columns].sum(axis=1), unit='m')
+        else:
+            sub_df['Worked Hours'] = pd.NaT
 
-    # Calculate status and attendance
-    df['Comments'] = df.apply(OutPunch_status, axis=1)
+        if break_columns:
+            sub_df['Break Hours'] = pd.to_timedelta(sub_df[break_columns].sum(axis=1), unit='m')
+        else:
+            sub_df['Break Hours'] = pd.NaT
 
-    # Calculate break hours
-    df['Worked Hours (Number)'] = df['Worked Hours'].apply(lambda x: round(pd.Timedelta(x).total_seconds() / 3600, 2) if x else pd.NaT)
-    df['Break Hours (Number)'] = df['Break Hours'].apply(lambda x: round(pd.Timedelta(x).total_seconds() / 3600, 2) if x else pd.NaT)
+        # Calculate status and attendance
+        if in_columns or out_columns:
+            sub_df['Comments'] = sub_df.apply(OutPunch_status, axis=1)
+        else:
+            sub_df['Comments'] = pd.NaT
+
+        # Calculate break hours
+        sub_df['Worked Hours (Number)'] = sub_df['Worked Hours'].apply(lambda x: round(pd.Timedelta(x).total_seconds() / 3600, 2) if pd.notna(x) else pd.NaT)
+        sub_df['Break Hours (Number)'] = sub_df['Break Hours'].apply(lambda x: round(pd.Timedelta(x).total_seconds() / 3600, 2) if pd.notna(x) else pd.NaT)
+
+        processed_punch = sub_df[['index', 'First_IN', 'Last_OUT', 'IN_Time Count', 'OUT_Time Count', 'Worked Hours', 'Break Hours', 'Comments', 'Worked Hours (Number)', 'Break Hours (Number)']]
+    else:
+        processed_punch = pd.DataFrame(columns=[
+            'index', 'First_IN', 'Last_OUT', 'IN_Time Count', 'OUT_Time Count',
+            'Worked Hours', 'Break Hours', 'Comments', 'Worked Hours (Number)', 'Break Hours (Number)'
+        ])
 
     # Merge with main dataframe
-    df = pd.merge(maindf, df, how='left', on='index')
+    df = pd.merge(maindf, processed_punch, how='left', on='index')
     df.rename(columns={'Team': 'Team Name'}, inplace=True)
     df['Source'] = 'Biometric'
 
-    df['No of Breaks (Biometric)'] = df['IN_Time Count'] - 1
+    df['No of Breaks (Biometric)'] = df['IN_Time Count'].fillna(0).astype(int) - 1
+    df.loc[df['No of Breaks (Biometric)'] < 0, 'No of Breaks (Biometric)'] = 0
 
-    df['Shift Timing'] = df['Shift_x'].apply(convert_shift_format)
+    shift_col = 'Shift_x' if 'Shift_x' in df.columns else 'Shift'
+    df['Shift Timing'] = df[shift_col].apply(convert_shift_format)
     df['Actual Shift Time'] = df['Shift Timing']
     
     df['Shift Start'] = df['Shift Timing'].apply(get_shift_start)
 
-    # df['No of Break Counts more than 4 Times (Biometric)'] = df['IN_Time Count'].replace('', 0).fillna(0).astype(int)
-    # df['IN_Time Count'] = pd.to_numeric(df['IN_Time Count'],errors='coerce')
     df['No of Break Counts more than 4 Times (Biometric)'] = (df['No of Breaks (Biometric)'].gt(4).map({True: 'Yes', False: pd.NA}))
 
-    # Function to calculate late login
-    def calculate_late_login(in_time_str, shift_start_time):
-        if pd.isna(in_time_str) or pd.isna(shift_start_time):
-            return pd.NaT
+    if 'First_IN' in df.columns and 'Shift Start' in df.columns:
+        df['Late Login Status'] = df.apply(lambda row: calculate_late_login(row.get('First_IN'), row.get('Shift Start')), axis=1)
+    else:
+        df['Late Login Status'] = pd.NaT
 
-        in_time = pd.to_datetime(in_time_str).time()
-        shift_start_dt = datetime.combine(datetime.today(), shift_start_time)
-        shift_start_with_grace = shift_start_dt #+ timedelta(minutes=5)
+    if 'First_IN' in df.columns:
+        df['Login Time'] = pd.to_datetime(df['First_IN'], errors='coerce').dt.strftime("%H:%M")
+    else:
+        df['Login Time'] = pd.NaT
 
-        in_time_dt = datetime.combine(datetime.today(), in_time)
-        late_minutes = in_time_dt - shift_start_with_grace
-
-        if in_time_dt > shift_start_with_grace:
-            hours = int(late_minutes.total_seconds() // 3600)
-            minutes = int((late_minutes.total_seconds() % 3600) // 60)
-            remaining_minutes = int(minutes % 60)
-            if late_minutes > timedelta(minutes=5):
-                if hours and remaining_minutes:
-                    return f"{hours} hrs {remaining_minutes} mins late"
-                elif not hours and remaining_minutes:
-                    return f"{remaining_minutes} mins late"
-                elif hours and not remaining_minutes:
-                    return f"{hours} hrs late"
-            else:
-                return 'No Delay'
-        elif in_time_dt < shift_start_with_grace:
-            return 'Early Login'
-        else:
-            return 'No Delay'
-    
-    df['Late Login Status'] = df.apply(lambda row: calculate_late_login(row['First_IN'], row['Shift Start']), axis=1)
-
-    df['Login Time'] = pd.to_datetime(df['First_IN']).dt.strftime("%H:%M")
-    df['Logout Time'] = pd.to_datetime(df['Last_OUT']).dt.strftime("%H:%M")
+    if 'Last_OUT' in df.columns:
+        df['Logout Time'] = pd.to_datetime(df['Last_OUT'], errors='coerce').dt.strftime("%H:%M")
+    else:
+        df['Logout Time'] = pd.NaT
 
     df['Idle Hours'] = pd.NaT
     df['Away Hours'] = pd.NaT
@@ -832,10 +847,13 @@ def process_biometric_data(df):
         'Date_x': 'Date',
     }
     df.rename(columns=rename_col, inplace=True)
+    if 'Date' not in df.columns and 'Date_y' in df.columns:
+        df.rename(columns={'Date_y': 'Date'}, inplace=True)
 
     df = final_adjustments(df)
 
     return df
+
 
 def process_timechamp_data(df):
     print("Stage: processing timechamp attendance data", flush=True)
